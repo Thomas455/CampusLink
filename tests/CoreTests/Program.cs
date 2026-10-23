@@ -231,9 +231,28 @@ namespace CoreTests
             }
         }
 
+        private static string HexOf(string text)
+        {
+            var bytes = Encoding.ASCII.GetBytes(text);
+            var builder = new StringBuilder(bytes.Length * 2);
+            foreach (var b in bytes) builder.Append(b.ToString("x2"));
+            return builder.ToString();
+        }
+
         private static void TestOnlineWithoutLogin(LogService log)
         {
-            using (var portal = new MockPortal(req => MockResponse.Redirect(Absolute(req, "/eportal/redirectortosuccess.jsp"))))
+            var sessionId = "4c2f5624ac0597f382192e487ba92bef";
+            var userIndex = HexOf(sessionId + "_10.1.2.3_2023123456");
+
+            using (var portal = new MockPortal(req =>
+            {
+                if (req.Path == "/") return MockResponse.Redirect(Absolute(req, "/eportal/redirectortosuccess.jsp"));
+                if (req.Path == "/eportal/redirectortosuccess.jsp")
+                    return MockResponse.Redirect(Absolute(req, "/eportal/success.jsp?userIndex=" + userIndex));
+                if (req.Path == "/eportal/InterFace.do" && req.Query.Contains("method=getOnlineUserInfo"))
+                    return MockResponse.Json("{\"result\":\"wait\",\"message\":\"用户信息不完整，请稍后重试\",\"userId\":\"2023123456\",\"userName\":\"测试用户\",\"userIp\":\"10.1.2.3\",\"userMac\":\"aabbccddeeff\"}");
+                return new MockResponse { Status = 404 };
+            }))
             {
                 var settings = new AppSettings { ProbeUrls = "http://127.0.0.1:" + portal.Port + "/" };
                 var profile = new AccountProfile
@@ -249,9 +268,44 @@ namespace CoreTests
                 {
                     Assert(result, "网络判定应可用");
                     Assert(!item.Session.Verified, "不应标记为已登录");
-                    Assert(item.Session.UserIndex.Length == 0, "不应有 userIndex");
                     Assert(item.StateText.Contains("免认证"), "状态应显示免认证，实际：" + item.StateText);
-                    Assert(item.Session.LastMessage.Contains("没有校验账号密码"), "应提示未校验账号密码");
+                });
+
+                Check("已在线时能从成功页识别在线账号并比对", () =>
+                {
+                    Equal("2023123456", item.Session.OnlineUserId, "在线账号");
+                    Assert(item.Session.OnlineAccountMatches == true, "应判定为与本账号一致");
+                    Equal("10.1.2.3", item.Session.OnlineUserIp, "在线 IP");
+                    Assert(item.Session.LastMessage.Contains("与本账号一致"), item.Session.LastMessage);
+                });
+            }
+
+            var otherIndex = HexOf(sessionId + "_10.1.2.3_2023000000");
+            using (var portal = new MockPortal(req =>
+            {
+                if (req.Path == "/") return MockResponse.Redirect(Absolute(req, "/eportal/redirectortosuccess.jsp"));
+                if (req.Path == "/eportal/redirectortosuccess.jsp")
+                    return MockResponse.Redirect(Absolute(req, "/eportal/success.jsp?userIndex=" + otherIndex));
+                if (req.Path == "/eportal/InterFace.do" && req.Query.Contains("method=getOnlineUserInfo"))
+                    return MockResponse.Json("{\"result\":\"success\",\"userId\":\"2023000000\",\"userIp\":\"10.1.2.3\",\"userMac\":\"aabbccddeeff\"}");
+                return new MockResponse { Status = 404 };
+            }))
+            {
+                var settings = new AppSettings { ProbeUrls = "http://127.0.0.1:" + portal.Port + "/" };
+                var profile = new AccountProfile
+                {
+                    UserId = "2023123456",
+                    Password = "x",
+                    PortalHost = "127.0.0.1:" + portal.Port
+                };
+                var item = new AccountItemViewModel(profile, log, () => settings);
+                item.LoginAsync(false).GetAwaiter().GetResult();
+
+                Check("在线账号不是本账号时给出警告", () =>
+                {
+                    Equal("2023000000", item.Session.OnlineUserId, "在线账号");
+                    Assert(item.Session.OnlineAccountMatches == false, "应判定为不一致");
+                    Assert(item.Session.LastMessage.Contains("不是本账号"), item.Session.LastMessage);
                 });
             }
         }

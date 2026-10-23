@@ -9,6 +9,7 @@
 | 模块 | 内容 |
 | --- | --- |
 | 核心认证 | 探测受 AC 拦截的 302 → 自动提取 `queryString` → 登录 → 按 `keepaliveInterval` 保活 → 下线 → 在线信息查询 |
+| 在线身份 | MAC 免认证已在线时，从成功页取 `userIndex` 并调 `getOnlineUserInfo`，显示当前在线的**真实账号**，与本账号不一致会黄标警告 |
 | MAC 无感 | 登录后调用 `registerMac` 注册无感认证；`cancelMacWithUserNameAndMac` 解绑；MAC 来自账号绑定的**网卡**，不需要手填 |
 | 多账号 | 账号列表 / 切换 / 一键全部登录 / 强制下线（`logoutByUserIdAndPass`）；每个账号绑定一块网卡（决定认证 MAC 与源 IP）和独立门户地址 |
 | 自动化 | 启动自动登录、掉线探测自动重连、登录后自动注册 MAC 无感 |
@@ -20,6 +21,7 @@
 ## 环境与构建
 
 - Windows 10/11，**.NET Framework 4.8**
+- **需要管理员权限**：exe 的清单里写了 `requireAdministrator`，双击会弹 UAC，用于修改网卡相关状态
 - Visual Studio 2026（18.x）或 MSBuild，NuGet 还原 `WPF-UI 4.3.0`、`Newtonsoft.Json 13.0.3`
 
 ```powershell
@@ -56,9 +58,11 @@ msbuild CampusLink.csproj -t:Restore,Build -p:Configuration=Release
 | 卡片状态 | 含义 |
 | --- | --- |
 | `在线` | 真的走通了 `login` 接口，拿到 `userIndex`，账号密码已通过门户校验 |
-| `在线·免认证` | 门户返回 `redirectortosuccess.jsp`，说明这块 MAC 已被 AC 放行；**本次没有校验账号密码** |
+| `在线·免认证` | 门户返回 `redirectortosuccess.jsp`，说明这块 MAC 已被 AC 放行；程序会继续查当前在线的**真实账号**并标注「本账号 / 非本账号」，但**没有校验密码** |
 | `待认证` | 拿到了 `queryString`，还没登录 |
 | `离线` / `异常` | 已下线 / 探测失败或接口报错 |
+
+> `在线·免认证` 时卡片会显示形如 `在线账号 2023xxxx（本账号）` 或 `⚠ 当前在线的是账号 2023xxxx，不是本账号`。这是从 `success.jsp?userIndex=` 解出来的：`userIndex` 是 `会话_IP_学号` 的十六进制。
 
 想验证某个账号的密码对不对，请用「自助服务 → 登录校验」（需要输验证码）；在该 MAC 已注册无感的前提下，直接点「登录」是不会触发密码校验的。
 
@@ -118,7 +122,10 @@ msbuild CampusLink.csproj -t:Restore,Build -p:Configuration=Release
 | 登录成功但很快掉线 | 密码复杂度不足（`PWD_COMPLEX_OFFLINE_WEB`），去自助服务改密 |
 | 注册了 MAC 还弹认证 | 先「解绑 MAC」再重新注册；确认账号绑定的网卡就是实际联网的那块 |
 | 探不到 queryString | 可能已经在线，或当前不在校园网。门户根返回 `redirectortosuccess.jsp` 就代表在线 |
-| 乱输密码也显示「在线」 | 这是 `在线·免认证`：该 MAC 已被 AC 放行，门户根本没校验密码。要用「自助服务 → 登录校验」验证账号 |
+| 乱输密码也显示「在线」 | 这是 `在线·免认证`：该 MAC 已被 AC 放行，门户没校验密码。卡片会显示当前真正在线的账号；若与本账号不符会有黄色警告 |
+| 卡片显示「在线账号 xxx（非本账号）」 | 说明当前这块网卡上的会话属于别的账号。要切回本账号：先「强制下线全部」，再「登录」 |
+| 保存设置/账号后网络请求变多 | 这是设计行为：保存后会主动探测并同步一次账号状态 |
+| 提示「需要管理员权限」 | 程序清单要求管理员运行，用于网卡相关操作；右键「以管理员身份运行」或直接双击弹 UAC 确认即可 |
 | 看不到托盘图标 | Windows 11 默认把新图标收进任务栏「^ 隐藏的图标」。设置 → 个性化 → 任务栏 → 其他系统托盘图标 → 打开 CampusLink；程序内「设置」页也有直达按钮 |
 | 设置了开机自启但没生效 | 检查 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 是否有 `CampusLink` 值 |
 | 双击 exe 没反应 | 程序是单实例的：已有实例在跑时会直接把它的窗口唤到前台 |
@@ -128,7 +135,7 @@ msbuild CampusLink.csproj -t:Restore,Build -p:Configuration=Release
 
 ```
 CampusLink/
-├─ CampusLink.csproj / CampusLink.slnx
+├─ CampusLink.csproj / CampusLink.slnx / app.manifest（requireAdministrator + PerMonitorV2 DPI）
 ├─ App.xaml(.cs) / MainWindow.xaml(.cs)
 ├─ Models/          账号（含网卡绑定）、设置、会话状态、接口结果
 ├─ Services/        HttpTransport、PortalClient、RuijieRsa、SelfServiceClient、

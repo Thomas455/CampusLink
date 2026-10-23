@@ -40,6 +40,10 @@ namespace CampusLink
 
             _viewModel.CaptchaRequested += ViewModel_OnCaptchaRequested;
             _viewModel.TrayTextChanged += OnTrayTextChanged;
+            _viewModel.Update.CheckFinished += (sender, manual) =>
+            {
+                if (manual) ShowUpdateDialog();
+            };
 
             _tray.ShowRequested += (s, e) => RestoreWindow();
             _tray.LoginRequested += (s, e) =>
@@ -71,6 +75,27 @@ namespace CampusLink
 
             var ok = dialog.ShowDialog();
             e.Code = ok == true ? dialog.Code : "";
+        }
+
+        private void UpdateBanner_OnClick(object sender, RoutedEventArgs e)
+        {
+            ShowUpdateDialog();
+        }
+
+        private void UpdateDismiss_OnClick(object sender, RoutedEventArgs e)
+        {
+            _viewModel.Update.Dismiss();
+        }
+
+        private void ShowUpdateDialog()
+        {
+            var dialog = new UpdateDialog
+            {
+                DataContext = _viewModel.Update,
+                Owner = this,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner
+            };
+            dialog.ShowDialog();
         }
 
         private void OnTrayTextChanged(string text)

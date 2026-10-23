@@ -15,6 +15,7 @@
 | 自动化 | 启动自动登录、掉线探测自动重连、登录后自动注册 MAC 无感 |
 | 自助服务 | 只能选「账号」页里已保存的账号；抓 RSA 公钥 + 验证码图片、登录校验、默认密码检测（验证码人工识别） |
 | 协议诊断 | 逐接口调用并把原始响应打印出来（排错 `queryString` / 密码加密模式 / 服务列表） |
+| 自动更新 | 检查 GitHub Releases（API 限流时走发布页 302 兜底），支持启动自动检查 + 手动检查，下载带进度条，下载完自动替换重启 |
 | 系统集成 | 单实例运行、托盘图标与菜单、开机自启、按天滚动日志；关闭窗口默认退出（可改为最小化到托盘） |
 | 安全 | 密码用 Windows DPAPI（当前用户）加密存盘；日志自动脱敏 `password/pass/pwd/verifycode` |
 
@@ -99,6 +100,23 @@ msbuild CampusLink.csproj -t:Restore,Build -p:Configuration=Release
 - 「检测默认密码」用模板（默认 `{uid}@Gzhu`）真登录一次：能登进去说明**默认密码没改**。
 - 改密、余额等页面是登录后的 JSF 动态页，未做接口化，点「打开自助服务」在浏览器里操作最稳。
 
+## 自动更新
+
+项目主页：<https://github.com/Thomas455/CampusLink>
+
+- **检查**：优先请求 `https://api.github.com/repos/Thomas455/CampusLink/releases/latest`；
+  若 API 被限流（403/429）或不可用，则请求 `https://github.com/Thomas455/CampusLink/releases/latest`，
+  从 302 跳转里解析版本号（不消耗 API 配额）。
+- **发布约定**（发 Release 时请照做，否则自动更新拿不到安装包）：
+  - tag 用 `vX.Y.Z`，例如 `v1.2.0`
+  - Release 附件上传 `CampusLink.exe`；如果是压缩包则命名为 `CampusLink.zip`（里面放 `CampusLink.exe`）
+- **UI**：发现新版本 → 主窗口顶部绿色提示条（可「忽略」）+ 托盘气泡；「关于」页可手动检查、查看发布说明、带进度条下载。
+- **安装**：下载到 `%TEMP%`，写一个带重试的 `.cmd`，等主进程退出后覆盖 exe 并重新启动（账号配置不动）。
+- **启动检查**：默认开启，且 6 小时内最多检查一次（可在设置里调整间隔/关闭）。
+- **镜像/离线测试**：设置环境变量 `CAMPUSLINK_UPDATE_API`（API 地址）、`CAMPUSLINK_UPDATE_WEB`（GitHub 网页基地址）可指向镜像或本地 mock。
+
+![更新对话框](../docs/screenshots/update-dialog.png)
+
 ## 数据与安全
 
 ```
@@ -126,6 +144,9 @@ msbuild CampusLink.csproj -t:Restore,Build -p:Configuration=Release
 | 卡片显示「在线账号 xxx（非本账号）」 | 说明当前这块网卡上的会话属于别的账号。要切回本账号：先「强制下线全部」，再「登录」 |
 | 保存设置/账号后网络请求变多 | 这是设计行为：保存后会主动探测并同步一次账号状态 |
 | 提示「需要管理员权限」 | 程序清单要求管理员运行，用于网卡相关操作；右键「以管理员身份运行」或直接双击弹 UAC 确认即可 |
+| 检查更新提示「仓库还没有发布版本」 | 先在 GitHub 发一个 Release（tag 形如 `v1.2.0`，附件放 `CampusLink.exe`） |
+| 更新后版本没变 | 确认 Release 的 tag 大于当前版本（关于页显示），且附件名符合约定 |
+| 更新下载失败 | 检查网络/代理；GitHub 下载地址被墙时可在 `设置` 或环境变量里改用镜像 |
 | 看不到托盘图标 | Windows 11 默认把新图标收进任务栏「^ 隐藏的图标」。设置 → 个性化 → 任务栏 → 其他系统托盘图标 → 打开 CampusLink；程序内「设置」页也有直达按钮 |
 | 设置了开机自启但没生效 | 检查 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 是否有 `CampusLink` 值 |
 | 双击 exe 没反应 | 程序是单实例的：已有实例在跑时会直接把它的窗口唤到前台 |
@@ -140,10 +161,10 @@ CampusLink/
 ├─ Models/          账号（含网卡绑定）、设置、会话状态、接口结果
 ├─ Services/        HttpTransport、PortalClient、RuijieRsa、SelfServiceClient、
 │                   AccountStore、KeepaliveService、AutoReconnectService、
-│                   StartupService、TrayService、NetworkAdapterService、ShellHelper
-├─ ViewModels/      Main / AccountItem / Settings / SelfService / Diagnostics / About
+│                   StartupService、TrayService、NetworkAdapterService、ShellHelper、UpdateService
+├─ ViewModels/      Main / AccountItem / Settings / SelfService / Diagnostics / About / Update
 ├─ Views/           AccountsPage / SelfServicePage / DiagnosticsPage / LogsPage /
-│                   SettingsPage / AboutPage / CaptchaDialog
+│                   SettingsPage / AboutPage / CaptchaDialog / UpdateDialog
 ├─ Infrastructure/  ObservableObject、RelayCommand、LogService、JsonHelper、UiDispatcher、
 │                   SingleInstance、ValueConverters
 └─ Resources/       app-icon.svg（矢量源）、app.ico（多尺寸）、app-icon-256.png、sponsor.jpg

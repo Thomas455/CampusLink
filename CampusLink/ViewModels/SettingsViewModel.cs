@@ -135,6 +135,22 @@ namespace CampusLink.ViewModels
             set { _settings.ShowBalloonNotifications = value; OnPropertyChanged(); }
         }
 
+        public bool CheckUpdateOnStartup
+        {
+            get => _settings.CheckUpdateOnStartup;
+            set { _settings.CheckUpdateOnStartup = value; OnPropertyChanged(); }
+        }
+
+        public int UpdateCheckIntervalHours
+        {
+            get => _settings.UpdateCheckIntervalHours;
+            set
+            {
+                _settings.UpdateCheckIntervalHours = Math.Max(1, Math.Min(168, value));
+                OnPropertyChanged();
+            }
+        }
+
         public string SelfServiceBaseUrl
         {
             get => _settings.SelfServiceBaseUrl;

@@ -40,6 +40,15 @@ namespace CampusLink.Models
         /// <summary>默认密码模板，{uid} 会被替换为学号。</summary>
         public string DefaultPasswordTemplate { get; set; } = "{uid}@Gzhu";
 
+        /// <summary>启动时自动检查 GitHub 更新。</summary>
+        public bool CheckUpdateOnStartup { get; set; } = true;
+
+        /// <summary>自动检查更新的最小间隔（小时），避免频繁请求 GitHub API。</summary>
+        public int UpdateCheckIntervalHours { get; set; } = 6;
+
+        /// <summary>上次检查更新的 UTC 时间（ISO8601）。</summary>
+        public string LastUpdateCheckUtc { get; set; } = "";
+
         public List<string> ProbeUrlList()
         {
             var list = new List<string>();

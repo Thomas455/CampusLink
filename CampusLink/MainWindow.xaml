@@ -65,7 +65,34 @@
                 </Border>
             </StackPanel>
 
-            <ContentControl x:Name="PageHost" Grid.Column="1" Margin="8,4,16,16" />
+            <Grid Grid.Column="1" Margin="8,4,16,16">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <Border Grid.Row="0" Background="#14261C" BorderBrush="{StaticResource GoodBrush}"
+                        BorderThickness="1" CornerRadius="8" Padding="14,8" Margin="0,0,0,8"
+                        Visibility="{Binding Update.HasUpdate, Converter={StaticResource BoolToVisibilityConverter}}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="{Binding Update.BannerText}" VerticalAlignment="Center"
+                                   FontSize="12" TextWrapping="Wrap"
+                                   Foreground="{StaticResource StrongTextBrush}" />
+                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                            <ui:Button Content="查看更新" Appearance="Primary" Height="28" Padding="10,0"
+                                       Margin="0,0,6,0" Click="UpdateBanner_OnClick" />
+                            <ui:Button Content="忽略" Appearance="Transparent" Height="28" Padding="8,0"
+                                       Click="UpdateDismiss_OnClick" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <ContentControl x:Name="PageHost" Grid.Row="1" />
+            </Grid>
         </Grid>
     </Grid>
 </ui:FluentWindow>

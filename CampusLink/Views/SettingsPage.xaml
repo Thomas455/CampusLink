@@ -101,6 +101,19 @@
 
             <Border Style="{StaticResource CardStyle}" Margin="0,16,0,0">
                 <StackPanel>
+                    <TextBlock Text="更新" Style="{StaticResource SectionTitleStyle}" />
+                    <CheckBox Content="启动时自动检查 GitHub 更新" IsChecked="{Binding CheckUpdateOnStartup}"
+                              Foreground="{StaticResource StrongTextBrush}" Margin="0,4,0,8" />
+                    <TextBlock Text="自动检查的最小间隔（小时）" Style="{StaticResource FieldLabelStyle}" />
+                    <ui:TextBox Width="140" HorizontalAlignment="Left"
+                                Text="{Binding UpdateCheckIntervalHours, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Style="{StaticResource MutedTextStyle}" Margin="0,6,0,0"
+                               Text="手动检查更新与下载进度在「关于」页；发现新版本时主窗口顶部也会出现提示条。仓库地址：github.com/Thomas455/CampusLink" />
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource CardStyle}" Margin="0,16,0,0">
+                <StackPanel>
                     <TextBlock Text="数据位置" Style="{StaticResource SectionTitleStyle}" />
                     <TextBlock Text="{Binding DataDirectory}" Style="{StaticResource MutedTextStyle}"
                                FontFamily="Consolas" />

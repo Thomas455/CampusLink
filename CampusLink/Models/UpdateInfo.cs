@@ -1,0 +1,30 @@
+using System;
+
+namespace CampusLink.Models
+{
+    public class UpdateAsset
+    {
+        public string Name { get; set; } = "";
+        public string Url { get; set; } = "";
+        public long Size { get; set; }
+    }
+
+    /// <summary>一次更新检查的结果。</summary>
+    public class UpdateInfo
+    {
+        public bool Checked { get; set; }
+        public bool HasUpdate { get; set; }
+
+        public string CurrentVersion { get; set; } = "";
+        public string LatestVersion { get; set; } = "";
+        public string TagName { get; set; } = "";
+        public string ReleaseName { get; set; } = "";
+        public string ReleaseNotes { get; set; } = "";
+        public string HtmlUrl { get; set; } = "";
+        public UpdateAsset Asset { get; set; }
+        public string Message { get; set; } = "";
+
+        public string VersionPair => "v" + (string.IsNullOrEmpty(CurrentVersion) ? "?" : CurrentVersion)
+                                     + "  →  v" + (string.IsNullOrEmpty(LatestVersion) ? "?" : LatestVersion);
+    }
+}

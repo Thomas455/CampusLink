@@ -51,6 +51,20 @@ namespace CampusLink
             var window = new MainWindow(ViewModel, Tray);
             MainWindow = window;
             window.SourceInitialized += (sender, args) => SingleInstance.Attach(window, window.RestoreFromExternal);
+
+            // 注意：必须在 Show() 之前挂 Loaded，否则可能错过第一次 Loaded 事件
+            window.Loaded += (sender, args) =>
+            {
+                Log.Info("窗口已加载，开始启动流程");
+                ViewModel.RunStartupAutoLogin();
+                ViewModel.StartupUpdateCheck();
+                if (ViewModel.Settings.ShowBalloonNotifications)
+                {
+                    Tray.ShowBalloon("CampusLink 已启动",
+                        "托盘图标在通知区域（Windows 11 可能折叠在 ^ 里）。关闭窗口默认退出，可在设置里改成最小化到托盘。");
+                }
+            };
+
             window.Show();
 
             ViewModel.StartBackgroundServices();
@@ -59,16 +73,6 @@ namespace CampusLink
             {
                 window.Hide();
             }
-
-            window.Loaded += (sender, args) =>
-            {
-                ViewModel.RunStartupAutoLogin();
-                if (ViewModel.Settings.ShowBalloonNotifications)
-                {
-                    Tray.ShowBalloon("CampusLink 已启动",
-                        "托盘图标在通知区域（Windows 11 可能折叠在 ^ 里）。关闭窗口默认退出，可在设置里改成最小化到托盘。");
-                }
-            };
         }
 
         protected override void OnExit(ExitEventArgs e)

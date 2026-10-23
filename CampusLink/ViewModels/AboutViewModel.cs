@@ -24,14 +24,16 @@ namespace CampusLink.ViewModels
         private readonly LogService _log;
         private string _status = "点「打开」在浏览器里访问，或「复制链接」分享。";
 
-        public AboutViewModel(LogService log, string dataDirectory, string logDirectory)
+        public AboutViewModel(LogService log, string dataDirectory, string logDirectory, UpdateViewModel update)
         {
             _log = log;
             DataDirectory = dataDirectory;
             LogDirectory = logDirectory;
+            Update = update;
 
             Links = new ObservableCollection<SocialLink>
             {
+                new SocialLink { Name = "项目主页（GitHub）", Badge = "P", Url = ProjectUrl },
                 new SocialLink { Name = "GitHub", Badge = "G", Url = "https://github.com/Thomas455" },
                 new SocialLink { Name = "哔哩哔哩", Badge = "B", Url = "https://space.bilibili.com/646916080" },
                 new SocialLink
@@ -46,7 +48,12 @@ namespace CampusLink.ViewModels
             CopyLinkCommand = new RelayCommand<SocialLink>(CopyLink);
             OpenDataFolderCommand = new RelayCommand(() => OpenFolder(DataDirectory));
             OpenLogFolderCommand = new RelayCommand(() => OpenFolder(LogDirectory));
+            OpenProjectCommand = new RelayCommand(() => ShellHelper.OpenUrl(ProjectUrl, _log));
         }
+
+        public const string ProjectUrl = "https://github.com/Thomas455/CampusLink";
+
+        public UpdateViewModel Update { get; }
 
         public ObservableCollection<SocialLink> Links { get; }
 
@@ -54,6 +61,7 @@ namespace CampusLink.ViewModels
         public ICommand CopyLinkCommand { get; }
         public ICommand OpenDataFolderCommand { get; }
         public ICommand OpenLogFolderCommand { get; }
+        public ICommand OpenProjectCommand { get; }
 
         public string DataDirectory { get; }
 

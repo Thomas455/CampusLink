@@ -172,6 +172,12 @@ namespace CoreTests
             TestVerifiedLogin(log);
             TestAdapters();
 
+            Console.WriteLine("== 自动更新 ==");
+            TestUpdateVersionParse();
+            TestUpdateCheckApi(log);
+            TestUpdateCheckFallback(log);
+            TestUpdateDownload(log);
+
             Console.WriteLine();
             Console.WriteLine("通过 " + _passed + " 项，失败 " + _failed + " 项");
             return _failed == 0 ? 0 : 1;
@@ -356,6 +362,186 @@ namespace CoreTests
             {
                 Assert(NetworkAdapterService.Find("不存在的网卡") == null, "应返回 null");
             });
+        }
+
+        private static void TestUpdateVersionParse()
+        {
+            Check("更新版本号解析", () =>
+            {
+                Equal("1.2.3", UpdateService.ParseVersionTag("v1.2.3").ToString(), "v1.2.3");
+                Equal("1.2.3", UpdateService.ParseVersionTag("1.2.3").ToString(), "1.2.3");
+                Equal("1.2.3", UpdateService.ParseVersionTag("v1.2.3-beta.1").ToString(), "1.2.3-beta");
+                Equal("1.2.0", UpdateService.ParseVersionTag("v1.2").ToString(), "v1.2");
+                Assert(UpdateService.ParseVersionTag("latest") == null, "非法版本应返回 null");
+            });
+            Check("更新版本比较", () =>
+            {
+                Assert(UpdateService.ParseVersionTag("v1.1.1") > UpdateService.ParseVersionTag("v1.1.0"), "1.1.1 > 1.1.0");
+                Assert(!(UpdateService.ParseVersionTag("v1.1.0") > UpdateService.ParseVersionTag("1.1.0")), "同版本不算更新");
+                Assert(!(UpdateService.ParseVersionTag("v1.0.9") > UpdateService.ParseVersionTag("v1.1.0")), "旧版本不算更新");
+            });
+        }
+
+        private static void TestUpdateCheckApi(LogService log)
+        {
+            var apiJson = "{\"tag_name\":\"v9.9.9\",\"name\":\"CampusLink 9.9.9\",\"body\":\"- 修复了若干问题\\n- 新增自动更新\",\"html_url\":\"https://github.com/Thomas455/CampusLink/releases/tag/v9.9.9\",\"assets\":[{\"name\":\"CampusLink.zip\",\"browser_download_url\":\"https://example.com/CampusLink.zip\",\"size\":100},{\"name\":\"CampusLink.exe\",\"browser_download_url\":\"https://example.com/CampusLink.exe\",\"size\":200}]}";
+
+            using (var portal = new MockPortal(req => req.Path == "/api/latest"
+                ? MockResponse.Json(apiJson)
+                : new MockResponse { Status = 404 }))
+            {
+                var service = new UpdateService(log, "Thomas455/CampusLink",
+                    "http://127.0.0.1:" + portal.Port + "/api/latest", null, "1.0.0");
+                var info = service.CheckAsync().GetAwaiter().GetResult();
+
+                Check("API 检查到新版本并优先选 exe 附件", () =>
+                {
+                    Assert(info.Checked, "应标记已检查");
+                    Assert(info.HasUpdate, "应发现更新：" + info.Message);
+                    Equal("9.9.9", info.LatestVersion, "最新版本");
+                    Assert(info.Asset != null && info.Asset.Name == "CampusLink.exe", "应优先选择 exe 附件");
+                    Assert(info.Asset.Url.EndsWith("CampusLink.exe"), "附件地址");
+                    Assert(info.ReleaseNotes.Contains("自动更新"), "发布说明");
+                    Equal("https://github.com/Thomas455/CampusLink/releases/tag/v9.9.9", info.HtmlUrl, "发布页地址");
+                });
+            }
+
+            using (var portal = new MockPortal(req => MockResponse.Json(
+                "{\"tag_name\":\"v0.0.1\",\"name\":\"old\",\"body\":\"\",\"html_url\":\"x\",\"assets\":[]}")))
+            {
+                var service = new UpdateService(log, "Thomas455/CampusLink",
+                    "http://127.0.0.1:" + portal.Port + "/api/latest", null, "1.0.0");
+                var info = service.CheckAsync().GetAwaiter().GetResult();
+                Check("版本不比当前新时提示已是最新", () =>
+                {
+                    Assert(info.Checked, "应标记已检查");
+                    Assert(!info.HasUpdate, "不应提示更新");
+                    Equal("已是最新版本", info.Message, "提示文案");
+                });
+            }
+        }
+
+        private static void TestUpdateCheckFallback(LogService log)
+        {
+            using (var portal = new MockPortal(req =>
+            {
+                if (req.Path == "/api/latest") return new MockResponse { Status = 403, Reason = "Forbidden" };
+                if (req.Path == "/Thomas455/CampusLink/releases/latest")
+                    return MockResponse.Redirect(Absolute(req, "/Thomas455/CampusLink/releases/tag/v9.8.7"));
+                return new MockResponse { Status = 404 };
+            }))
+            {
+                var webBase = "http://127.0.0.1:" + portal.Port;
+                var service = new UpdateService(log, "Thomas455/CampusLink", webBase + "/api/latest", webBase, "1.0.0");
+                var info = service.CheckAsync().GetAwaiter().GetResult();
+
+                Check("API 限流时改用发布页 302 兜底", () =>
+                {
+                    Assert(info.Checked, "应标记已检查");
+                    Assert(info.HasUpdate, "应发现更新：" + info.Message);
+                    Equal("9.8.7", info.LatestVersion, "最新版本");
+                    Assert(info.Asset != null && info.Asset.Url.Contains("/releases/download/v9.8.7/CampusLink.exe"),
+                        "应按约定推断附件地址：" + (info.Asset == null ? "null" : info.Asset.Url));
+                });
+            }
+        }
+
+        private static void TestUpdateDownload(LogService log)
+        {
+            var exeBytes = new byte[300 * 1024];
+            for (var i = 0; i < exeBytes.Length; i++) exeBytes[i] = (byte)(i % 251);
+
+            using (var portal = new MockPortal(req =>
+            {
+                if (req.Path == "/CampusLink.exe")
+                {
+                    return new MockResponse
+                    {
+                        Body = exeBytes,
+                        Headers = { ["Content-Type"] = "application/octet-stream" }
+                    };
+                }
+                return new MockResponse { Status = 404 };
+            }))
+            {
+                var service = new UpdateService(log, "Thomas455/CampusLink", "http://127.0.0.1:" + portal.Port + "/api");
+                var info = new UpdateInfo
+                {
+                    HasUpdate = true,
+                    LatestVersion = "9.9.9",
+                    Asset = new UpdateAsset
+                    {
+                        Name = "CampusLink.exe",
+                        Url = "http://127.0.0.1:" + portal.Port + "/CampusLink.exe",
+                        Size = exeBytes.Length
+                    }
+                };
+
+                var reports = new List<double>();
+                var progress = new SyncProgress(reports);
+                var path = service.DownloadAsync(info, progress, System.Threading.CancellationToken.None)
+                    .GetAwaiter().GetResult();
+
+                Check("下载更新包并上报进度", () =>
+                {
+                    Assert(File.Exists(path), "下载文件不存在");
+                    Assert(new FileInfo(path).Length == exeBytes.Length, "下载大小不一致");
+                    Assert(reports.Count > 0, "没有进度回调");
+                    Assert(reports[reports.Count - 1] >= 99.0, "进度应到 100，实际 " + reports[reports.Count - 1]);
+                    try { File.Delete(path); } catch { }
+                });
+            }
+
+            // zip 包自动解出 exe
+            var pkgDir = Path.Combine(Path.GetTempPath(), "campuslink-pkg-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(pkgDir);
+            File.WriteAllBytes(Path.Combine(pkgDir, "CampusLink.exe"), new byte[] { 1, 2, 3, 4, 5 });
+            var zipPath = Path.Combine(Path.GetTempPath(), "campuslink-test-" + Guid.NewGuid().ToString("N") + ".zip");
+            System.IO.Compression.ZipFile.CreateFromDirectory(pkgDir, zipPath);
+
+            using (var portal = new MockPortal(req => req.Path == "/pkg.zip"
+                ? new MockResponse { Body = File.ReadAllBytes(zipPath) }
+                : new MockResponse { Status = 404 }))
+            {
+                var service = new UpdateService(log, "Thomas455/CampusLink", "http://127.0.0.1:" + portal.Port + "/api");
+                var info = new UpdateInfo
+                {
+                    HasUpdate = true,
+                    LatestVersion = "9.9.9",
+                    Asset = new UpdateAsset
+                    {
+                        Name = "CampusLink.zip",
+                        Url = "http://127.0.0.1:" + portal.Port + "/pkg.zip"
+                    }
+                };
+
+                var path = service.DownloadAsync(info, null, System.Threading.CancellationToken.None)
+                    .GetAwaiter().GetResult();
+
+                Check("zip 更新包自动解出 exe", () =>
+                {
+                    Assert(path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase), "应返回 exe 路径：" + path);
+                    Assert(File.Exists(path), "解出的 exe 不存在");
+                });
+            }
+
+            try { File.Delete(zipPath); Directory.Delete(pkgDir, true); } catch { }
+        }
+
+        /// <summary>同步记录进度，避免 Progress&lt;T&gt; 在线程池上异步回调导致断言时还没写完。</summary>
+        private sealed class SyncProgress : IProgress<double>
+        {
+            private readonly List<double> _values;
+
+            public SyncProgress(List<double> values)
+            {
+                _values = values;
+            }
+
+            public void Report(double value)
+            {
+                _values.Add(value);
+            }
         }
 
         private static string Absolute(MockRequest request, string path)

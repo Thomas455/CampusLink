@@ -49,7 +49,8 @@ namespace CampusLink.ViewModels
             Settings = new SettingsViewModel(_settings, log, OnSettingsSaved);
             SelfService = new SelfServiceViewModel(log, () => _settings, Accounts);
             Diagnostics = new DiagnosticsViewModel(log, () => _settings);
-            About = new AboutViewModel(log, _store.DataDirectory, _log.LogDirectory);
+            About = new AboutViewModel(log, _store.DataDirectory, _log.LogDirectory,
+                new UpdateViewModel(CreateUpdateService(log), log, () => Application.Current?.Shutdown()));
 
             AddAccountCommand = new RelayCommand(OpenAddEditor);
             EditAccountCommand = new RelayCommand<AccountItemViewModel>(OpenEditEditor);
@@ -81,6 +82,8 @@ namespace CampusLink.ViewModels
         public SelfServiceViewModel SelfService { get; }
         public DiagnosticsViewModel Diagnostics { get; }
         public AboutViewModel About { get; }
+
+        public UpdateViewModel Update => About.Update;
 
         public ICommand AddAccountCommand { get; }
         public ICommand EditAccountCommand { get; }
@@ -451,6 +454,39 @@ namespace CampusLink.ViewModels
             }
         }
 
+        /// <summary>启动时按设置检查更新（受最小间隔限制），发现新版本后由界面弹提示条。</summary>
+        public async void StartupUpdateCheck()
+        {
+            _log.Debug("启动检查更新：enabled=" + _settings.CheckUpdateOnStartup
+                       + "，last=" + _settings.LastUpdateCheckUtc
+                       + "，interval=" + _settings.UpdateCheckIntervalHours);
+            if (!_settings.CheckUpdateOnStartup) return;
+
+            var interval = Math.Max(1, _settings.UpdateCheckIntervalHours);
+            DateTime last;
+            if (DateTime.TryParse(_settings.LastUpdateCheckUtc, null,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out last)
+                && DateTime.UtcNow - last.ToUniversalTime() < TimeSpan.FromHours(interval))
+            {
+                _log.Debug("距上次检查更新不足 " + interval + " 小时，跳过");
+                return;
+            }
+
+            try
+            {
+                await Update.CheckAsync(false).ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                _log.Warn("启动检查更新失败：" + ex.Message);
+            }
+            finally
+            {
+                _settings.LastUpdateCheckUtc = DateTime.UtcNow.ToString("o");
+                _store.SaveSettings(_settings);
+            }
+        }
+
         public async void RunStartupAutoLogin()
         {
             if (!_settings.AutoLoginOnStartup) return;
@@ -622,6 +658,21 @@ namespace CampusLink.ViewModels
         {
             _log.Error("命令执行异常", ex);
             EditorHint = "操作异常：" + ex.Message;
+        }
+
+        /// <summary>
+        /// 默认走 GitHub；设置环境变量 CAMPUSLINK_UPDATE_API / CAMPUSLINK_UPDATE_WEB
+        /// 可以指向镜像或本地 mock（用于离线测试）。
+        /// </summary>
+        private static UpdateService CreateUpdateService(LogService log)
+        {
+            var api = Environment.GetEnvironmentVariable("CAMPUSLINK_UPDATE_API");
+            var web = Environment.GetEnvironmentVariable("CAMPUSLINK_UPDATE_WEB");
+            return string.IsNullOrWhiteSpace(api) && string.IsNullOrWhiteSpace(web)
+                ? new UpdateService(log)
+                : new UpdateService(log, UpdateService.DefaultRepository,
+                    string.IsNullOrWhiteSpace(api) ? null : api,
+                    string.IsNullOrWhiteSpace(web) ? null : web);
         }
 
         // ---------------------------------------------------------------- 持久化

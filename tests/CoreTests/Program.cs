@@ -444,6 +444,25 @@ namespace CoreTests
                         "应按约定推断附件地址：" + (info.Asset == null ? "null" : info.Asset.Url));
                 });
             }
+
+            // 没有 Release 时 GitHub 会把 latest 跳到 /releases
+            using (var portal = new MockPortal(req =>
+            {
+                if (req.Path == "/api/latest") return new MockResponse { Status = 403, Reason = "Forbidden" };
+                if (req.Path == "/Thomas455/CampusLink/releases/latest")
+                    return MockResponse.Redirect(Absolute(req, "/Thomas455/CampusLink/releases"));
+                return new MockResponse { Status = 404 };
+            }))
+            {
+                var webBase = "http://127.0.0.1:" + portal.Port;
+                var service = new UpdateService(log, "Thomas455/CampusLink", webBase + "/api/latest", webBase, "1.0.0");
+                var info = service.CheckAsync().GetAwaiter().GetResult();
+                Check("没有 Release 时提示未发布而不是乱识别版本", () =>
+                {
+                    Assert(!info.HasUpdate, "不应提示更新");
+                    Equal("仓库还没有发布版本", info.Message, "提示文案");
+                });
+            }
         }
 
         private static void TestUpdateDownload(LogService log)

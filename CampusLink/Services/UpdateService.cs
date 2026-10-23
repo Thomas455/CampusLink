@@ -178,6 +178,15 @@ namespace CampusLink.Services
             }
 
             info.HtmlUrl = HttpTransport.CombineUrl(location, "");
+            if (info.HtmlUrl.IndexOf("/releases/tag/", StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                // GitHub 在没有 Release 时会把 latest 跳到 /releases
+                info.Checked = true;
+                info.Message = "仓库还没有发布版本";
+                _log?.Info("检查更新（发布页）：没有找到 tag，视为无发布版本");
+                return;
+            }
+
             var tag = info.HtmlUrl.TrimEnd('/');
             var slash = tag.LastIndexOf('/');
             if (slash >= 0) tag = tag.Substring(slash + 1);

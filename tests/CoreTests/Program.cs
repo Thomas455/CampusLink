@@ -177,6 +177,8 @@ namespace CoreTests
             TestUpdateCheckApi(log);
             TestUpdateCheckFallback(log);
             TestUpdateDownload(log);
+            TestUpdateMultiSource(log);
+            TestUpdateAlternateAsset(log);
 
             Console.WriteLine();
             Console.WriteLine("通过 " + _passed + " 项，失败 " + _failed + " 项");
@@ -416,7 +418,7 @@ namespace CoreTests
                 {
                     Assert(info.Checked, "应标记已检查");
                     Assert(!info.HasUpdate, "不应提示更新");
-                    Equal("已是最新版本", info.Message, "提示文案");
+                    Assert(info.Message.Contains("已是最新版本"), "提示文案：" + info.Message);
                 });
             }
         }
@@ -460,7 +462,7 @@ namespace CoreTests
                 Check("没有 Release 时提示未发布而不是乱识别版本", () =>
                 {
                     Assert(!info.HasUpdate, "不应提示更新");
-                    Equal("仓库还没有发布版本", info.Message, "提示文案");
+                    Assert(info.Message.Contains("还没有发布版本"), "提示文案：" + info.Message + " checked=" + info.Checked);
                 });
             }
         }
@@ -545,6 +547,118 @@ namespace CoreTests
             }
 
             try { File.Delete(zipPath); Directory.Delete(pkgDir, true); } catch { }
+        }
+
+        private static void TestUpdateMultiSource(LogService log)
+        {
+            // GitCode 列表接口：返回两个版本，取最高
+            var gitcodeJson = "[{\"tag_name\":\"v1.0.5\",\"name\":\"old\",\"body\":\"\",\"html_url\":\"x\",\"assets\":[]}," +
+                              "{\"tag_name\":\"v1.3.0\",\"name\":\"new\",\"body\":\"GitCode 发布说明\",\"html_url\":\"https://gitcode.com/Thomas455/CampusLink/releases/tag/v1.3.0\"," +
+                              "\"assets\":[{\"name\":\"CampusLink.exe\",\"browser_download_url\":\"https://gitcode.com/dl/CampusLink.exe\",\"size\":10}]}]";
+            var githubJson = "{\"tag_name\":\"v1.2.0\",\"name\":\"gh\",\"body\":\"GitHub 发布说明\",\"html_url\":\"https://github.com/Thomas455/CampusLink/releases/tag/v1.2.0\",\"assets\":[{\"name\":\"CampusLink.exe\",\"browser_download_url\":\"https://github.com/dl/CampusLink.exe\",\"size\":10}]}";
+
+            using (var portal = new MockPortal(req =>
+            {
+                if (req.Path == "/gitcode") return MockResponse.Json(gitcodeJson);
+                if (req.Path == "/github") return MockResponse.Json(githubJson);
+                return new MockResponse { Status = 404 };
+            }))
+            {
+                var webBase = "http://127.0.0.1:" + portal.Port;
+                var gitcode = UpdateService.CreateSource("GitCode", "Thomas455/CampusLink", webBase, webBase + "/gitcode");
+                gitcode.ApiReturnsArray = true;
+                var github = UpdateService.CreateSource("GitHub", "Thomas455/CampusLink", webBase, webBase + "/github");
+                var service = new UpdateService(log, new[] { gitcode, github }, "1.0.0");
+                var info = service.CheckAsync().GetAwaiter().GetResult();
+
+                Check("多源检查：取版本最高的源（GitCode 1.3.0 > GitHub 1.2.0）", () =>
+                {
+                    Assert(info.HasUpdate, "应发现更新：" + info.Message);
+                    Equal("1.3.0", info.LatestVersion, "最新版本");
+                    Equal("GitCode", info.SourceName, "来源");
+                    Assert(info.Asset != null && info.Asset.Url.Contains("gitcode.com"), "应使用 GitCode 附件");
+                    Assert(info.AlternateAssets.Count == 0, "低版本源的附件不应作为备选");
+                });
+            }
+
+            // GitCode 旧、GitHub 新 → 选 GitHub，并把 GitCode 同版本附件作为备选
+            using (var portal = new MockPortal(req =>
+            {
+                if (req.Path == "/gitcode") return MockResponse.Json(
+                    "[{\"tag_name\":\"v1.2.0\",\"body\":\"\",\"html_url\":\"x\",\"assets\":[{\"name\":\"CampusLink.exe\",\"browser_download_url\":\"https://gitcode.com/dl/CampusLink.exe\"}]}]");
+                if (req.Path == "/github") return MockResponse.Json(
+                    "{\"tag_name\":\"v1.5.0\",\"name\":\"gh\",\"body\":\"\",\"html_url\":\"https://github.com/x\",\"assets\":[{\"name\":\"CampusLink.exe\",\"browser_download_url\":\"https://github.com/dl/CampusLink.exe\"}]}");
+                return new MockResponse { Status = 404 };
+            }))
+            {
+                var webBase = "http://127.0.0.1:" + portal.Port;
+                var gitcode = UpdateService.CreateSource("GitCode", "Thomas455/CampusLink", webBase, webBase + "/gitcode");
+                gitcode.ApiReturnsArray = true;
+                var github = UpdateService.CreateSource("GitHub", "Thomas455/CampusLink", webBase, webBase + "/github");
+                var service = new UpdateService(log, new[] { gitcode, github }, "1.0.0");
+                var info = service.CheckAsync().GetAwaiter().GetResult();
+
+                Check("多源检查：GitHub 版本更高时选 GitHub", () =>
+                {
+                    Equal("1.5.0", info.LatestVersion, "最新版本");
+                    Equal("GitHub", info.SourceName, "来源");
+                    Assert(info.AlternateAssets.Count == 0, "低版本源的附件不应作为备选");
+                });
+            }
+
+            // GitCode API 空数组 + tag 兜底
+            using (var portal = new MockPortal(req =>
+            {
+                if (req.Path == "/gitcode") return MockResponse.Json("[]");
+                if (req.Path.EndsWith("/info/refs", StringComparison.Ordinal))
+                    return MockResponse.Text("001e# service=git-upload-pack\n0000" +
+                                             "003f4c2f5624ac0597f382192e487ba92bee refs/tags/v2.0.0\n");
+                return new MockResponse { Status = 404 };
+            }))
+            {
+                var webBase = "http://127.0.0.1:" + portal.Port;
+                var gitcode = UpdateService.CreateSource("GitCode", "Thomas455/CampusLink", webBase, webBase + "/gitcode");
+                gitcode.ApiReturnsArray = true;
+                var service = new UpdateService(log, new[] { gitcode }, "1.0.0");
+                var info = service.CheckAsync().GetAwaiter().GetResult();
+
+                Check("GitCode 无 Release 时用 tag 兜底发现新版本（无附件提示）", () =>
+                {
+                    Assert(info.HasUpdate, "应从 tag 发现更新");
+                    Equal("2.0.0", info.LatestVersion, "最新版本");
+                    Assert(info.Asset == null, "没有附件");
+                    Assert(info.Message.Contains("安装包附件"), "应提示缺少附件：" + info.Message);
+                });
+            }
+        }
+
+        private static void TestUpdateAlternateAsset(LogService log)
+        {
+            var payload = new byte[] { 9, 8, 7, 6 };
+            using (var portal = new MockPortal(req => req.Path == "/good.exe"
+                ? new MockResponse { Body = payload }
+                : new MockResponse { Status = 404 }))
+            {
+                var baseUrl = "http://127.0.0.1:" + portal.Port;
+                var service = new UpdateService(log, "Thomas455/CampusLink", baseUrl + "/api");
+                var info = new UpdateInfo
+                {
+                    HasUpdate = true,
+                    LatestVersion = "2.0.0",
+                    Asset = new UpdateAsset { Name = "CampusLink.exe", Url = baseUrl + "/missing.exe" }
+                };
+                info.AlternateAssets.Add(new UpdateAsset { Name = "CampusLink.exe", Url = baseUrl + "/good.exe" });
+
+                var path = service.DownloadAsync(info, null, System.Threading.CancellationToken.None)
+                    .GetAwaiter().GetResult();
+
+                Check("主下载地址失败时自动尝试备选源附件", () =>
+                {
+                    Assert(File.Exists(path), "下载文件不存在");
+                    Equal("4", new FileInfo(path).Length.ToString(), "文件大小");
+                    try { File.Delete(path); } catch { }
+                });
+            }
         }
 
         /// <summary>同步记录进度，避免 Progress&lt;T&gt; 在线程池上异步回调导致断言时还没写完。</summary>

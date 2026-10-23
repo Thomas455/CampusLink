@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace CampusLink.Models
 {
@@ -21,7 +22,12 @@ namespace CampusLink.Models
         public string ReleaseName { get; set; } = "";
         public string ReleaseNotes { get; set; } = "";
         public string HtmlUrl { get; set; } = "";
+        public string SourceName { get; set; } = "";
         public UpdateAsset Asset { get; set; }
+
+        /// <summary>其它更新源上同版本/更新版本的附件，主地址失败时依次尝试。</summary>
+        public List<UpdateAsset> AlternateAssets { get; set; } = new List<UpdateAsset>();
+
         public string Message { get; set; } = "";
 
         public string VersionPair => "v" + (string.IsNullOrEmpty(CurrentVersion) ? "?" : CurrentVersion)

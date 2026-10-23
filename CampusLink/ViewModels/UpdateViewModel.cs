@@ -57,6 +57,7 @@ namespace CampusLink.ViewModels
                 OnPropertyChanged(nameof(Notes));
                 OnPropertyChanged(nameof(LatestVersionText));
                 OnPropertyChanged(nameof(AssetName));
+                OnPropertyChanged(nameof(SourceText));
                 CommandManager.InvalidateRequerySuggested();
             }
         }
@@ -64,7 +65,9 @@ namespace CampusLink.ViewModels
         public bool HasUpdate => _info != null && _info.HasUpdate;
 
         public string BannerText => HasUpdate
-            ? "发现新版本 " + _info.VersionPair + " · 更新会自动下载并重启，账号配置保留"
+            ? "发现新版本 " + _info.VersionPair
+              + (string.IsNullOrWhiteSpace(_info.SourceName) ? "" : "（" + _info.SourceName + "）")
+              + " · 更新会自动下载并重启，账号配置保留"
             : "";
 
         public string VersionPair => _info == null ? "" : _info.VersionPair;
@@ -102,6 +105,10 @@ namespace CampusLink.ViewModels
         public string CurrentVersionText => "v" + _service.CurrentVersion;
 
         public string AssetName => _info?.Asset == null ? "" : _info.Asset.Name;
+
+        public string SourceText => _info == null || string.IsNullOrWhiteSpace(_info.SourceName)
+            ? ""
+            : "来源：" + _info.SourceName;
 
         public bool IsChecking
         {
@@ -160,8 +167,8 @@ namespace CampusLink.ViewModels
                 Info = info;
                 StatusText = info.HasUpdate
                     ? "发现新版本 " + info.VersionPair
+                      + (string.IsNullOrWhiteSpace(info.SourceName) ? "" : "（来源 " + info.SourceName + "）")
                     : (string.IsNullOrWhiteSpace(info.Message) ? "已是最新版本" : info.Message);
-                _log.Info("检查更新：" + StatusText);
                 CheckFinished?.Invoke(this, manual);
                 return info;
             }

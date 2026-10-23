@@ -59,10 +59,12 @@ namespace CampusLink.Services
 
         private readonly CookieContainer _cookies = new CookieContainer();
         private readonly IPAddress _sourceIp;
+        private readonly bool _useSystemProxy;
 
-        public HttpTransport(string sourceIp = null, string userAgent = null)
+        public HttpTransport(string sourceIp = null, string userAgent = null, bool useSystemProxy = false)
         {
             UserAgent = string.IsNullOrWhiteSpace(userAgent) ? BrowserUserAgent : userAgent;
+            _useSystemProxy = useSystemProxy;
             if (!string.IsNullOrWhiteSpace(sourceIp) && IPAddress.TryParse(sourceIp.Trim(), out var ip))
             {
                 _sourceIp = ip;
@@ -95,7 +97,8 @@ namespace CampusLink.Services
                 request.Timeout = timeoutMs;
                 request.ReadWriteTimeout = timeoutMs;
                 request.KeepAlive = false;
-                request.Proxy = null;
+                // 校园网门户是局域网，默认直连；访问 GitHub 时走系统代理（否则有代理的环境会失败）
+                if (!_useSystemProxy) request.Proxy = null;
                 request.ServicePoint.Expect100Continue = false;
                 if (useCookies) request.CookieContainer = _cookies;
                 if (!string.IsNullOrEmpty(referer)) request.Referer = referer;

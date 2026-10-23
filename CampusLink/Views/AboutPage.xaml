@@ -48,6 +48,7 @@
                     </Grid>
 
                     <TextBlock Text="{Binding Update.StatusText}" Style="{StaticResource MutedTextStyle}" Margin="0,8,0,0" />
+                    <TextBlock Text="{Binding Update.SourceText}" Style="{StaticResource MutedTextStyle}" Margin="0,2,0,0" />
 
                     <ProgressBar Height="6" Minimum="0" Maximum="100" Value="{Binding Update.Progress, Mode=OneWay}"
                                  Margin="0,10,0,0" Background="#1B2130" Foreground="{StaticResource AccentBrush}"

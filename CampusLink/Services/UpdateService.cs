@@ -1,11 +1,12 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Net;
 using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using CampusLink.Infrastructure;
@@ -14,11 +15,37 @@ using Newtonsoft.Json.Linq;
 
 namespace CampusLink.Services
 {
+    /// <summary>一个更新源（GitCode / GitHub），按配置顺序依次检查。</summary>
+    public class UpdateSource
+    {
+        public string Name { get; set; } = "GitHub";
+
+        /// <summary>owner/repo。</summary>
+        public string Repository { get; set; } = "";
+
+        /// <summary>网页基地址，例如 https://github.com。</summary>
+        public string WebBase { get; set; } = "https://github.com";
+
+        /// <summary>API 地址：GitCode 用 releases 列表，GitHub 用 releases/latest。</summary>
+        public string ApiUrl { get; set; } = "";
+
+        /// <summary>true = API 返回数组（GitCode / Gitee 风格）；false = 返回单个对象（GitHub latest）。</summary>
+        public bool ApiReturnsArray { get; set; }
+
+        /// <summary>是否支持 releases/latest 的 302 兜底（GitHub）。</summary>
+        public bool SupportsLatestRedirect { get; set; }
+
+        public string RepoUrl => WebBase.TrimEnd('/') + "/" + Repository;
+
+        public string ReleasesUrl => RepoUrl + "/releases";
+
+        public string TagsInfoUrl => RepoUrl + ".git/info/refs?service=git-upload-pack";
+    }
+
     /// <summary>
-    /// GitHub Releases 自更新：
-    /// 1) 先查 GitHub API（能拿到发布说明和附件）；
-    /// 2) API 被限流/失败时退回 releases/latest 的 302 跳转（不受 API 限流影响），
-    ///    并按约定文件名 CampusLink.exe / CampusLink.zip 推断下载地址。
+    /// 多源自更新：默认先 GitCode、再 GitHub。
+    /// 每个源：API →（GitHub）releases/latest 302 → git tags 兜底；
+    /// 所有源里取版本最高的一个，同版本时优先排在前面的源（GitCode），并把其它源的附件作为下载备选。
     /// </summary>
     public class UpdateService
     {
@@ -27,31 +54,71 @@ namespace CampusLink.Services
         private const string UserAgent = "CampusLink-Updater";
 
         private readonly LogService _log;
-        private readonly HttpTransport _http = new HttpTransport(null, UserAgent);
+        private readonly HttpTransport _http;
+        private readonly List<UpdateSource> _sources;
+        private readonly bool _useSystemProxy;
 
-        public UpdateService(LogService log, string repository = null, string apiUrl = null, string webBaseUrl = null,
-            string currentVersion = null)
+        public UpdateService(LogService log, IEnumerable<UpdateSource> sources, string currentVersion = null,
+            bool useSystemProxy = false)
         {
             _log = log;
-            Repository = string.IsNullOrWhiteSpace(repository) ? DefaultRepository : repository.Trim().Trim('/');
-            WebBaseUrl = string.IsNullOrWhiteSpace(webBaseUrl) ? "https://github.com" : webBaseUrl.TrimEnd('/');
-            ApiUrl = string.IsNullOrWhiteSpace(apiUrl)
-                ? "https://api.github.com/repos/" + Repository + "/releases/latest"
-                : apiUrl;
+            _useSystemProxy = useSystemProxy;
+            _http = new HttpTransport(null, UserAgent, useSystemProxy);
+            _sources = (sources ?? Enumerable.Empty<UpdateSource>()).Where(s => s != null).ToList();
+            if (_sources.Count == 0) _sources.AddRange(CreateDefaultSources());
             CurrentVersion = string.IsNullOrWhiteSpace(currentVersion) ? DetectCurrentVersion() : currentVersion.Trim();
         }
 
-        public string Repository { get; }
+        /// <summary>兼容单源构造（测试/镜像用），按 GitHub 行为处理（支持 releases/latest 跳转）。</summary>
+        public UpdateService(LogService log, string repository = null, string apiUrl = null, string webBaseUrl = null,
+            string currentVersion = null, bool useSystemProxy = false)
+            : this(log, new[]
+            {
+                CreateSource("GitHub", string.IsNullOrWhiteSpace(repository) ? DefaultRepository : repository,
+                    string.IsNullOrWhiteSpace(webBaseUrl) ? "https://github.com" : webBaseUrl,
+                    string.IsNullOrWhiteSpace(apiUrl) ? null : apiUrl)
+            }, currentVersion, useSystemProxy)
+        {
+            _sources[0].SupportsLatestRedirect = true;
+        }
 
-        public string WebBaseUrl { get; }
+        public static List<UpdateSource> CreateDefaultSources()
+        {
+            var list = new List<UpdateSource>
+            {
+                CreateSource("GitCode", DefaultRepository, "https://gitcode.com",
+                    "https://api.gitcode.com/api/v5/repos/" + DefaultRepository + "/releases"),
+                CreateSource("GitHub", DefaultRepository, "https://github.com",
+                    "https://api.github.com/repos/" + DefaultRepository + "/releases/latest")
+            };
+            list[0].ApiReturnsArray = true;
+            list[1].SupportsLatestRedirect = true;
+            return list;
+        }
 
-        public string ApiUrl { get; }
+        public static UpdateSource CreateSource(string name, string repository, string webBase, string apiUrl)
+        {
+            var repo = string.IsNullOrWhiteSpace(repository) ? DefaultRepository : repository.Trim().Trim('/');
+            return new UpdateSource
+            {
+                Name = name,
+                Repository = repo,
+                WebBase = string.IsNullOrWhiteSpace(webBase) ? "https://github.com" : webBase.TrimEnd('/'),
+                ApiUrl = string.IsNullOrWhiteSpace(apiUrl)
+                    ? "https://api.github.com/repos/" + repo + "/releases/latest"
+                    : apiUrl
+            };
+        }
+
+        public IReadOnlyList<UpdateSource> Sources => _sources;
 
         public string CurrentVersion { get; }
 
-        public string RepoUrl => WebBaseUrl + "/" + Repository;
+        public string RepoUrl => _sources[0].RepoUrl;
 
-        public string ReleasesUrl => RepoUrl + "/releases";
+        public string ReleasesUrl => _sources[0].ReleasesUrl;
+
+        public string ApiUrl => _sources[0].ApiUrl;
 
         /// <summary>当前程序版本（三段式）。</summary>
         public static string DetectCurrentVersion()
@@ -72,52 +139,126 @@ namespace CampusLink.Services
 
         public async Task<UpdateInfo> CheckAsync()
         {
+            var infos = new List<UpdateInfo>();
+            foreach (var source in _sources)
+            {
+                infos.Add(await CheckSourceAsync(source).ConfigureAwait(false));
+            }
+
+            var candidates = infos
+                .Where(i => i.HasUpdate)
+                .OrderByDescending(i => ParseVersionTag(i.LatestVersion) ?? new Version(0, 0, 0))
+                .ThenBy(i => IndexOf(i.SourceName))
+                .ToList();
+
+            if (candidates.Count > 0)
+            {
+                var best = candidates[0];
+                // 其它源同版本（或更新）的附件作为下载备选
+                foreach (var other in candidates.Skip(1))
+                {
+                    if (other.Asset == null) continue;
+                    if (ParseVersionTag(other.LatestVersion) >= ParseVersionTag(best.LatestVersion))
+                    {
+                        best.AlternateAssets.Add(other.Asset);
+                    }
+                }
+
+                if (best.Asset == null && best.AlternateAssets.Count > 0) best.Asset = best.AlternateAssets[0];
+                if (best.Asset == null)
+                {
+                    best.Message = "检测到新版本 " + best.LatestVersion + "，但没有找到可下载的安装包附件";
+                }
+
+                _log?.Info("检查更新：选中 " + best.SourceName + " 的 " + best.TagName + "（当前 v" + CurrentVersion + "）"
+                           + (best.Asset == null ? "，无附件" : "，附件 " + best.Asset.Name));
+                return best;
+            }
+
+            var summary = new UpdateInfo
+            {
+                CurrentVersion = CurrentVersion,
+                HtmlUrl = ReleasesUrl,
+                SourceName = _sources[0].Name,
+                Checked = infos.Any(i => i.Checked)
+            };
+            summary.Message = string.Join("；", infos.Select(i =>
+                i.SourceName + "：" + (string.IsNullOrWhiteSpace(i.Message) ? (i.Checked ? "已是最新版本" : "检查失败") : i.Message)));
+            if (string.IsNullOrWhiteSpace(summary.Message)) summary.Message = "检查失败";
+            _log?.Info("检查更新：没有新版本（" + summary.Message + "）");
+            return summary;
+        }
+
+        private int IndexOf(string sourceName)
+        {
+            for (var i = 0; i < _sources.Count; i++)
+            {
+                if (string.Equals(_sources[i].Name, sourceName, StringComparison.OrdinalIgnoreCase)) return i;
+            }
+            return 99;
+        }
+
+        private async Task<UpdateInfo> CheckSourceAsync(UpdateSource source)
+        {
             var info = new UpdateInfo
             {
                 CurrentVersion = CurrentVersion,
-                HtmlUrl = ReleasesUrl
+                HtmlUrl = source.ReleasesUrl,
+                SourceName = source.Name
             };
+
             try
             {
-                var response = await _http.SendAsync(ApiUrl, "GET", null, null, null, 12000, false).ConfigureAwait(false);
+                var response = await _http.SendAsync(source.ApiUrl, "GET", null, null, null, 12000, false)
+                    .ConfigureAwait(false);
                 if (response.StatusCode == 200)
                 {
-                    ParseApi(info, response.Text);
+                    if (source.ApiReturnsArray) ParseReleaseList(info, response.Text);
+                    else ParseReleaseObject(info, response.Text);
+
+                    // API 明确给出过版本时，不再用兜底覆盖结论
+                    var apiGaveVersion = !string.IsNullOrWhiteSpace(info.LatestVersion);
+                    if (!info.HasUpdate && !apiGaveVersion && source.SupportsLatestRedirect)
+                    {
+                        // API 返回空/无版本时，GitHub 还能用 releases/latest 跳转兜底
+                        await TryRedirectAsync(source, info).ConfigureAwait(false);
+                    }
+
+                    if (!info.HasUpdate && string.IsNullOrWhiteSpace(info.LatestVersion))
+                    {
+                        await TryTagsAsync(source, info).ConfigureAwait(false);
+                    }
+
                     info.Checked = true;
+                    if (string.IsNullOrEmpty(info.Message) && !info.HasUpdate) info.Message = "已是最新版本";
                     return info;
                 }
 
-                if (response.StatusCode == 404)
-                {
-                    info.Checked = true;
-                    info.Message = "仓库还没有发布版本";
-                    return info;
-                }
-
-                info.Message = "GitHub API 返回 " + response.StatusCode + "，改用发布页检测";
-                _log?.Warn(info.Message);
+                info.Message = "API 返回 " + response.StatusCode;
             }
             catch (Exception ex)
             {
-                info.Message = "GitHub API 不可用：" + ex.Message;
-                _log?.Warn(info.Message);
+                info.Message = "API 不可用：" + ex.Message;
             }
 
-            try
+            _log?.Warn("[" + source.Name + "] " + info.Message);
+
+            if (source.SupportsLatestRedirect)
             {
-                await CheckViaRedirectAsync(info).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                info.Checked = true;
-                info.Message = "检查更新失败：" + ex.Message;
-                _log?.Warn(info.Message);
+                await TryRedirectAsync(source, info).ConfigureAwait(false);
             }
 
+            if (!info.HasUpdate)
+            {
+                await TryTagsAsync(source, info).ConfigureAwait(false);
+            }
+
+            info.Checked = true;
+            if (string.IsNullOrEmpty(info.Message) && !info.HasUpdate) info.Message = "已是最新版本";
             return info;
         }
 
-        private void ParseApi(UpdateInfo info, string json)
+        private void ParseReleaseObject(UpdateInfo info, string json)
         {
             var root = JsonHelper.ParseObject(json);
             if (root == null)
@@ -126,13 +267,64 @@ namespace CampusLink.Services
                 info.Message = "更新信息解析失败";
                 return;
             }
+            FillFromRelease(info, root);
+        }
 
-            info.TagName = JsonHelper.GetString(root, "tag_name", "");
-            info.ReleaseName = JsonHelper.GetString(root, "name", "");
-            info.ReleaseNotes = JsonHelper.GetString(root, "body", "");
-            info.HtmlUrl = JsonHelper.GetString(root, "html_url", ReleasesUrl);
+        private void ParseReleaseList(UpdateInfo info, string json)
+        {
+            JArray array = null;
+            var trimmed = (json ?? "").Trim();
+            if (trimmed.StartsWith("["))
+            {
+                try { array = JArray.Parse(trimmed); } catch { }
+            }
+            if (array == null)
+            {
+                info.Checked = true;
+                info.Message = "更新信息解析失败";
+                return;
+            }
 
-            var assets = root["assets"] as JArray;
+            if (array.Count == 0)
+            {
+                info.Checked = true;
+                info.Message = "该源还没有发布版本";
+                return;
+            }
+
+            JObject best = null;
+            Version bestVersion = null;
+            foreach (var token in array)
+            {
+                var obj = token as JObject;
+                if (obj == null) continue;
+                var version = ParseVersionTag(JsonHelper.GetString(obj, "tag_name", ""));
+                if (version == null) continue;
+                if (bestVersion == null || version > bestVersion)
+                {
+                    bestVersion = version;
+                    best = obj;
+                }
+            }
+
+            if (best == null)
+            {
+                info.Checked = true;
+                info.Message = "该源没有可识别的版本";
+                return;
+            }
+
+            FillFromRelease(info, best);
+        }
+
+        private void FillFromRelease(UpdateInfo info, JObject release)
+        {
+            info.TagName = JsonHelper.GetString(release, "tag_name", "");
+            info.ReleaseName = JsonHelper.GetString(release, "name", "");
+            info.ReleaseNotes = JsonHelper.GetString(release, "body", "");
+            info.HtmlUrl = JsonHelper.GetString(release, "html_url", info.HtmlUrl);
+
+            var assets = release["assets"] as JArray ?? release["attach_files"] as JArray;
             info.Asset = PickAsset(assets);
 
             var latest = ParseVersionTag(info.TagName);
@@ -140,7 +332,6 @@ namespace CampusLink.Services
             info.HasUpdate = latest != null && latest > ParseVersionTag(CurrentVersion);
             info.Checked = true;
             if (!info.HasUpdate) info.Message = "已是最新版本";
-            _log?.Info("检查更新：当前 v" + CurrentVersion + "，最新 " + info.TagName + "，有更新=" + info.HasUpdate);
         }
 
         private static UpdateAsset PickAsset(JArray assets)
@@ -149,14 +340,17 @@ namespace CampusLink.Services
             UpdateAsset zip = null;
             foreach (var token in assets)
             {
-                var name = JsonHelper.GetString(token as JObject, "name", "");
-                var url = JsonHelper.GetString(token as JObject, "browser_download_url", "");
+                var obj = token as JObject;
+                if (obj == null) continue;
+                var name = JsonHelper.GetString(obj, "name", "");
+                var url = JsonHelper.GetString(obj, "browser_download_url", "");
+                if (string.IsNullOrWhiteSpace(url)) url = JsonHelper.GetString(obj, "download_url", "");
                 if (string.IsNullOrWhiteSpace(url)) continue;
                 var asset = new UpdateAsset
                 {
                     Name = name,
                     Url = url,
-                    Size = JsonHelper.GetInt(token as JObject, "size", 0)
+                    Size = JsonHelper.GetInt(obj, "size", 0)
                 };
                 var lower = name.ToLowerInvariant();
                 if (lower.EndsWith(".exe")) return asset;
@@ -165,52 +359,89 @@ namespace CampusLink.Services
             return zip;
         }
 
-        private async Task CheckViaRedirectAsync(UpdateInfo info)
+        private async Task TryRedirectAsync(UpdateSource source, UpdateInfo info)
         {
-            var latestUrl = RepoUrl + "/releases/latest";
-            var response = await _http.SendAsync(latestUrl, "GET", null, null, null, 12000, false).ConfigureAwait(false);
-            var location = response.RawLocation ?? "";
-            if (string.IsNullOrWhiteSpace(location))
+            try
             {
-                info.Checked = true;
-                info.Message = "发布页没有返回跳转，可能还没有发布版本";
-                return;
-            }
-
-            info.HtmlUrl = HttpTransport.CombineUrl(location, "");
-            if (info.HtmlUrl.IndexOf("/releases/tag/", StringComparison.OrdinalIgnoreCase) < 0)
-            {
-                // GitHub 在没有 Release 时会把 latest 跳到 /releases
-                info.Checked = true;
-                info.Message = "仓库还没有发布版本";
-                _log?.Info("检查更新（发布页）：没有找到 tag，视为无发布版本");
-                return;
-            }
-
-            var tag = info.HtmlUrl.TrimEnd('/');
-            var slash = tag.LastIndexOf('/');
-            if (slash >= 0) tag = tag.Substring(slash + 1);
-            tag = Uri.UnescapeDataString(tag);
-            info.TagName = tag;
-
-            var latest = ParseVersionTag(tag);
-            info.LatestVersion = latest == null ? tag : Format(latest);
-            info.HasUpdate = latest != null && latest > ParseVersionTag(CurrentVersion);
-            info.Checked = true;
-            info.Message = info.HasUpdate ? "" : "已是最新版本";
-
-            if (info.HasUpdate && info.Asset == null)
-            {
-                // 按发布约定推断附件名
-                info.Asset = new UpdateAsset
+                _log?.Debug("[" + source.Name + "] 尝试发布页兜底：" + source.ReleasesUrl + "/latest");
+                var response = await _http.SendAsync(source.ReleasesUrl + "/latest", "GET", null, null, null, 12000, false)
+                    .ConfigureAwait(false);
+                _log?.Debug("[" + source.Name + "] 发布页返回 " + response.StatusCode + "，Location=" + (response.RawLocation ?? "(空)"));
+                var location = response.RawLocation ?? "";
+                if (string.IsNullOrWhiteSpace(location))
                 {
-                    Name = "CampusLink.exe",
-                    Url = RepoUrl + "/releases/download/" + Uri.EscapeDataString(tag) + "/CampusLink.exe",
-                    Size = 0
-                };
-            }
+                    info.Message = "该源还没有发布版本";
+                    return;
+                }
 
-            _log?.Info("检查更新（发布页）：最新 " + tag + "，有更新=" + info.HasUpdate);
+                var absolute = HttpTransport.CombineUrl(location, "");
+                if (absolute.IndexOf("/releases/tag/", StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    info.Message = "该源还没有发布版本";
+                    return;
+                }
+
+                var tag = absolute.TrimEnd('/');
+                var slash = tag.LastIndexOf('/');
+                if (slash >= 0) tag = tag.Substring(slash + 1);
+                tag = Uri.UnescapeDataString(tag);
+                info.TagName = tag;
+                info.HtmlUrl = absolute;
+                var latest = ParseVersionTag(tag);
+                info.LatestVersion = latest == null ? tag : Format(latest);
+                info.HasUpdate = latest != null && latest > ParseVersionTag(CurrentVersion);
+                if (!info.HasUpdate) info.Message = "已是最新版本";
+                else if (info.Asset == null)
+                {
+                    info.Asset = new UpdateAsset
+                    {
+                        Name = "CampusLink.exe",
+                        Url = source.RepoUrl + "/releases/download/" + Uri.EscapeDataString(tag) + "/CampusLink.exe"
+                    };
+                }
+                _log?.Info("[" + source.Name + "] 发布页兜底：最新 " + tag + "，有更新=" + info.HasUpdate);
+            }
+            catch (Exception ex)
+            {
+                _log?.Warn("[" + source.Name + "] 发布页检测失败：" + ex.Message);
+            }
+        }
+
+        private async Task TryTagsAsync(UpdateSource source, UpdateInfo info)
+        {
+            try
+            {
+                var response = await _http.SendAsync(source.TagsInfoUrl, "GET", null, null, null, 10000, false)
+                    .ConfigureAwait(false);
+                if (!response.Ok || string.IsNullOrEmpty(response.Text)) return;
+
+                Version bestVersion = null;
+                string bestTag = null;
+                foreach (Match match in Regex.Matches(response.Text, "refs/tags/([^\\s\\^]+)"))
+                {
+                    var tag = match.Groups[1].Value;
+                    var version = ParseVersionTag(tag);
+                    if (version == null) continue;
+                    if (bestVersion == null || version > bestVersion)
+                    {
+                        bestVersion = version;
+                        bestTag = tag;
+                    }
+                }
+
+                if (bestTag == null || !(bestVersion > ParseVersionTag(CurrentVersion))) return;
+
+                info.TagName = bestTag;
+                info.LatestVersion = Format(bestVersion);
+                info.HasUpdate = true;
+                info.Checked = true;
+                info.Message = info.Asset == null ? "只在 tag 里发现新版本，没有找到安装包附件" : "";
+                _log?.Info("[" + source.Name + "] tag 兜底：发现 " + bestTag);
+            }
+            catch (Exception ex)
+            {
+                _log?.Warn("[" + source.Name + "] tag 检测失败：" + ex.Message);
+            }
         }
 
         public static Version ParseVersionTag(string text)
@@ -223,9 +454,12 @@ namespace CampusLink.Services
             var plus = value.IndexOf('+');
             if (plus > 0) value = value.Substring(0, plus);
 
-            Version version;
-            if (!Version.TryParse(value, out version)) return null;
-            return new Version(version.Major, version.Minor, Math.Max(version.Build, 0));
+            var match = Regex.Match(value, "^(\\d+)\\.(\\d+)(?:\\.(\\d+))?$");
+            if (!match.Success) return null;
+            var major = int.Parse(match.Groups[1].Value);
+            var minor = int.Parse(match.Groups[2].Value);
+            var build = match.Groups[3].Success ? int.Parse(match.Groups[3].Value) : 0;
+            return new Version(major, minor, build);
         }
 
         private static string Format(Version version) => version.Major + "." + version.Minor + "." + version.Build;
@@ -235,7 +469,8 @@ namespace CampusLink.Services
         /// <summary>下载更新包并返回本地路径（zip 会在这里解出 exe）。</summary>
         public async Task<string> DownloadAsync(UpdateInfo info, IProgress<double> progress, CancellationToken token)
         {
-            if (info?.Asset == null || string.IsNullOrWhiteSpace(info.Asset.Url))
+            if (info == null) throw new ArgumentNullException(nameof(info));
+            if (info.Asset == null || string.IsNullOrWhiteSpace(info.Asset.Url))
             {
                 throw new InvalidOperationException("没有可下载的更新附件");
             }
@@ -244,6 +479,11 @@ namespace CampusLink.Services
             if (info.Asset.Url.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
             {
                 urls.Add(info.Asset.Url.Substring(0, info.Asset.Url.Length - 4) + ".zip");
+            }
+            foreach (var alternate in info.AlternateAssets)
+            {
+                if (alternate == null || string.IsNullOrWhiteSpace(alternate.Url)) continue;
+                if (!urls.Contains(alternate.Url)) urls.Add(alternate.Url);
             }
 
             Exception last = null;
@@ -257,7 +497,7 @@ namespace CampusLink.Services
                         "CampusLink-update-" + info.LatestVersion + "-" + Guid.NewGuid().ToString("N").Substring(0, 6) + extension);
 
                     _log?.Info("开始下载更新：" + url);
-                    await DownloadFileAsync(url, target, progress, token).ConfigureAwait(false);
+                    await DownloadFileAsync(url, target, progress, token, _useSystemProxy).ConfigureAwait(false);
                     _log?.Info("下载完成：" + target + "（" + new FileInfo(target).Length + " 字节）");
                     return PreparePackage(target);
                 }
@@ -271,14 +511,14 @@ namespace CampusLink.Services
             throw last ?? new InvalidOperationException("下载失败");
         }
 
-        private static async Task DownloadFileAsync(string url, string targetPath, IProgress<double> progress, CancellationToken token)
+        private static async Task DownloadFileAsync(string url, string targetPath, IProgress<double> progress, CancellationToken token, bool useSystemProxy)
         {
             var request = (HttpWebRequest)WebRequest.Create(url);
             request.UserAgent = UserAgent;
             request.AllowAutoRedirect = true;
             request.Timeout = 30000;
             request.ReadWriteTimeout = 30000;
-            request.Proxy = null;
+            if (!useSystemProxy) request.Proxy = null;
 
             using (var response = (HttpWebResponse)await request.GetResponseAsync().ConfigureAwait(false))
             using (var stream = response.GetResponseStream())
@@ -348,10 +588,10 @@ namespace CampusLink.Services
             File.WriteAllText(script, content, Encoding.Default);
 
             log?.Info("开始替换程序：" + newExePath + " -> " + currentExe);
-            Process.Start(new ProcessStartInfo("cmd.exe", "/c \"" + script + "\"")
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c \"" + script + "\"")
             {
                 UseShellExecute = true,
-                WindowStyle = ProcessWindowStyle.Hidden,
+                WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden,
                 CreateNoWindow = true
             });
         }

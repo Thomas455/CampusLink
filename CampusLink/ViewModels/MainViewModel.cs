@@ -661,18 +661,23 @@ namespace CampusLink.ViewModels
         }
 
         /// <summary>
-        /// 默认走 GitHub；设置环境变量 CAMPUSLINK_UPDATE_API / CAMPUSLINK_UPDATE_WEB
-        /// 可以指向镜像或本地 mock（用于离线测试）。
+        /// 默认按 GitCode → GitHub 顺序检查；设置环境变量可以指向镜像或本地 mock（用于离线测试）：
+        /// CAMPUSLINK_GITCODE_API / CAMPUSLINK_GITCODE_WEB / CAMPUSLINK_UPDATE_API / CAMPUSLINK_UPDATE_WEB。
         /// </summary>
         private static UpdateService CreateUpdateService(LogService log)
         {
-            var api = Environment.GetEnvironmentVariable("CAMPUSLINK_UPDATE_API");
-            var web = Environment.GetEnvironmentVariable("CAMPUSLINK_UPDATE_WEB");
-            return string.IsNullOrWhiteSpace(api) && string.IsNullOrWhiteSpace(web)
-                ? new UpdateService(log)
-                : new UpdateService(log, UpdateService.DefaultRepository,
-                    string.IsNullOrWhiteSpace(api) ? null : api,
-                    string.IsNullOrWhiteSpace(web) ? null : web);
+            var sources = UpdateService.CreateDefaultSources();
+            ApplyOverride(sources[0], "CAMPUSLINK_GITCODE_API", "CAMPUSLINK_GITCODE_WEB");
+            ApplyOverride(sources[1], "CAMPUSLINK_UPDATE_API", "CAMPUSLINK_UPDATE_WEB");
+            return new UpdateService(log, sources, null, useSystemProxy: true);
+        }
+
+        private static void ApplyOverride(UpdateSource source, string apiVariable, string webVariable)
+        {
+            var api = Environment.GetEnvironmentVariable(apiVariable);
+            var web = Environment.GetEnvironmentVariable(webVariable);
+            if (!string.IsNullOrWhiteSpace(api)) source.ApiUrl = api;
+            if (!string.IsNullOrWhiteSpace(web)) source.WebBase = web.TrimEnd('/');
         }
 
         // ---------------------------------------------------------------- 持久化

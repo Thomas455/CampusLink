@@ -32,6 +32,16 @@ namespace CampusLink.Models
         /// <summary>true = 通过 login 接口拿到 userIndex；false = 只是探测到网络已通。</summary>
         public bool Verified { get; set; }
 
+        /// <summary>已在线（MAC 免认证）时，从成功页/在线信息里识别出的账号。</summary>
+        public string OnlineUserId { get; set; } = "";
+
+        public string OnlineUserIp { get; set; } = "";
+
+        public string OnlineUserMac { get; set; } = "";
+
+        /// <summary>识别出的在线账号是否就是本账号（null 表示尚未识别）。</summary>
+        public bool? OnlineAccountMatches { get; set; }
+
         public string LastMessage { get; set; } = "";
 
         public DateTime? LastCheckTime { get; set; }

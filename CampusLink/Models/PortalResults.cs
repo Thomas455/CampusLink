@@ -56,9 +56,23 @@ namespace CampusLink.Models
     public class OnlineUserInfoResult : ApiResult
     {
         public string UserId { get; set; } = "";
+        public string UserName { get; set; } = "";
         public string UserIp { get; set; } = "";
         public string UserMac { get; set; } = "";
         public string UserUrl { get; set; } = "";
+    }
+
+    /// <summary>
+    /// 已登录（MAC 免认证）状态下，从成功页重定向里找到的会话信息。
+    /// userIndex 是十六进制串，解码后形如「会话_IP_学号」。
+    /// </summary>
+    public class OnlineSessionDiscovery : ApiResult
+    {
+        public string UserIndex { get; set; } = "";
+        public string DecodedUserId { get; set; } = "";
+        public string DecodedIp { get; set; } = "";
+
+        public bool Found => !string.IsNullOrWhiteSpace(UserIndex);
     }
 
     public class ServiceOption

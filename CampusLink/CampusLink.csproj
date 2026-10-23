@@ -19,6 +19,7 @@
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <NoWarn>NU1701</NoWarn>
     <ApplicationIcon>Resources\app.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <PlatformTarget>AnyCPU</PlatformTarget>
@@ -192,6 +193,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />
+    <None Include="app.manifest" />
   </ItemGroup>
   <ItemGroup>
     <Resource Include="Resources\app.ico" />

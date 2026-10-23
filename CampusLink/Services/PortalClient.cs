@@ -106,8 +106,7 @@ namespace CampusLink.Services
         }
 
         /// <summary>从 302 Location 里抠出 index.jsp? 之后的完整查询串和 mac。</summary>
-        private static bool TryExtractQueryString(string location, ProbeResult result)
-        {
+        private static bool TryExtractQueryString(string location, ProbeResult result)        {
             if (string.IsNullOrEmpty(location)) return false;
             var indexPos = location.IndexOf("index.jsp", StringComparison.OrdinalIgnoreCase);
             var questionPos = location.IndexOf('?');
@@ -127,6 +126,86 @@ namespace CampusLink.Services
                 result.Mac = Uri.UnescapeDataString(macMatch.Groups[1].Value);
             }
             return true;
+        }
+
+        // ---------------------------------------------------------------- 已在线身份识别
+
+        /// <summary>
+        /// 已在线（MAC 免认证）时，门户根会 302 到 redirectortosuccess.jsp，
+        /// 该页再 302 到 success.jsp?userIndex=&lt;hex&gt;。hex 解码后是「会话_IP_学号」，
+        /// 拿到 userIndex 就可以调 getOnlineUserInfo 确认当前在线的到底是哪个账号。
+        /// </summary>
+        public async Task<OnlineSessionDiscovery> DiscoverOnlineSessionAsync(string tag)
+        {
+            var result = new OnlineSessionDiscovery();
+
+            var root = await _http.SendAsync(BaseUrl + "/", "GET", null, null, BaseUrl + "/", 8000, false)
+                .ConfigureAwait(false);
+            var firstLocation = root.RawLocation ?? "";
+            if (firstLocation.IndexOf("redirectortosuccess", StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                result.Message = "当前不是已登录成功页（" +
+                                 (string.IsNullOrWhiteSpace(firstLocation) ? "HTTP " + root.StatusCode : firstLocation) + "）";
+                return result;
+            }
+
+            var successUrl = HttpTransport.CombineUrl(BaseUrl + "/", firstLocation);
+            var success = await _http.SendAsync(successUrl, "GET", null, null, BaseUrl + "/", 8000, false)
+                .ConfigureAwait(false);
+
+            var userIndex = ExtractUserIndex(success.RawLocation) ?? ExtractUserIndex(success.Text) ?? "";
+            if (userIndex.Length == 0)
+            {
+                result.Message = "成功页没有携带 userIndex";
+                return result;
+            }
+
+            result.UserIndex = userIndex;
+            result.Success = true;
+            DecodeUserIndex(userIndex, result);
+            _log.Info("已在线：取得 userIndex（长度 " + userIndex.Length + "）"
+                      + (string.IsNullOrEmpty(result.DecodedUserId) ? "" : "，解码账号 " + Mask(result.DecodedUserId))
+                      + (string.IsNullOrEmpty(result.DecodedIp) ? "" : "，IP " + result.DecodedIp), tag);
+            return result;
+        }
+
+        private static string ExtractUserIndex(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return null;
+            var match = Regex.Match(text, "userIndex['\"]?\\s*[=:]\\s*['\"]?([0-9a-fA-F]{16,})", RegexOptions.IgnoreCase);
+            return match.Success ? match.Groups[1].Value : null;
+        }
+
+        /// <summary>userIndex 是 ASCII 字符串的 hex：会话Id_IP_学号。</summary>
+        private static void DecodeUserIndex(string userIndex, OnlineSessionDiscovery result)
+        {
+            try
+            {
+                if (userIndex.Length % 2 != 0) return;
+                var builder = new StringBuilder(userIndex.Length / 2);
+                for (var i = 0; i < userIndex.Length; i += 2)
+                {
+                    builder.Append((char)Convert.ToInt32(userIndex.Substring(i, 2), 16));
+                }
+                var decoded = builder.ToString();
+                var parts = decoded.Split('_');
+                if (parts.Length < 2) return;
+                if (Regex.IsMatch(parts[parts.Length - 1], "^\\d{4,20}$")) result.DecodedUserId = parts[parts.Length - 1];
+                if (parts.Length >= 3 && Regex.IsMatch(parts[parts.Length - 2], "^\\d{1,3}(\\.\\d{1,3}){3}$"))
+                {
+                    result.DecodedIp = parts[parts.Length - 2];
+                }
+            }
+            catch
+            {
+                // 不是 hex 就算了，后面还能靠 getOnlineUserInfo 拿
+            }
+        }
+
+        private static string Mask(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+            return value.Length <= 4 ? "****" : value.Substring(0, 3) + "****" + value.Substring(value.Length - 2);
         }
 
         // ---------------------------------------------------------------- 页面配置
@@ -448,12 +527,16 @@ namespace CampusLink.Services
                 return result;
             }
 
-            result.Success = string.Equals(JsonHelper.GetString(json, "result", "success"), "success", StringComparison.OrdinalIgnoreCase);
-            if (!result.Success) result.Message = JsonHelper.GetString(json, "message", "查询失败");
             result.UserId = JsonHelper.GetString(json, "userId", "");
+            result.UserName = JsonHelper.GetString(json, "userName", "");
             result.UserIp = JsonHelper.GetString(json, "userIp", "");
             result.UserMac = JsonHelper.GetString(json, "userMac", "");
             result.UserUrl = JsonHelper.GetString(json, "userUrl", "");
+
+            // 门户有时返回 result=wait（"用户信息不完整，请稍后重试"）但字段其实已经带回来了
+            result.Success = string.Equals(JsonHelper.GetString(json, "result", "success"), "success", StringComparison.OrdinalIgnoreCase)
+                             || !string.IsNullOrWhiteSpace(result.UserId);
+            if (!result.Success) result.Message = JsonHelper.GetString(json, "message", "查询失败");
             return result;
         }
 

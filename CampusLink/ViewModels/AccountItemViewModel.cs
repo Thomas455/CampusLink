@@ -87,7 +87,10 @@ namespace CampusLink.ViewModels
             {
                 switch (Session.State)
                 {
-                    case LinkState.Online: return Session.Verified ? "#22C55E" : "#0EA5E9";
+                    case LinkState.Online:
+                        if (Session.Verified) return "#22C55E";
+                        if (Session.OnlineAccountMatches == false) return "#F59E0B";
+                        return "#0EA5E9";
                     case LinkState.NeedAuth: return "#F59E0B";
                     case LinkState.Probing:
                     case LinkState.LoggingIn: return "#3B82F6";
@@ -116,7 +119,16 @@ namespace CampusLink.ViewModels
             get
             {
                 if (!Session.IsOnline) return "未建立会话";
-                if (!Session.Verified) return "网络已通（MAC 免认证，未校验账号）";
+                if (!Session.Verified)
+                {
+                    if (!string.IsNullOrWhiteSpace(Session.OnlineUserId))
+                    {
+                        var suffix = Session.OnlineAccountMatches == true ? "（本账号）"
+                            : Session.OnlineAccountMatches == false ? "（非本账号）" : "";
+                        return "在线账号 " + Session.OnlineUserId + suffix;
+                    }
+                    return "网络已通（MAC 免认证，账号未识别）";
+                }
                 var index = Session.UserIndex ?? "";
                 if (index.Length > 12) index = index.Substring(0, 12) + "...";
                 return "userIndex " + index + "  ·  保活 " + Session.KeepaliveInterval + "s";
@@ -179,13 +191,17 @@ namespace CampusLink.ViewModels
 
                 if (probe.Online)
                 {
-                    // 关键：这里只是"网络通"，并没有验证账号密码，不能当成登录成功
+                    // 网络已通，但没有校验密码；尽量从成功页取 userIndex 再查在线账号是谁
                     Session.State = LinkState.Online;
                     Session.Verified = false;
                     Session.UserIndex = "";
                     Session.LastLoginTime = null;
-                    Session.LastMessage = "当前网络已在线（AC 返回成功页）。这通常是 MAC 免认证，本次没有校验账号密码。";
+                    Session.OnlineUserId = "";
+                    Session.OnlineAccountMatches = null;
+                    Session.LastMessage = "当前网络已在线（AC 返回成功页），正在识别在线账号…";
                     Refresh();
+
+                    await RefreshOnlineIdentityAsync().ConfigureAwait(true);
                     RaiseStateChanged();
                     return true;
                 }
@@ -338,7 +354,10 @@ namespace CampusLink.ViewModels
                     Session.State = LinkState.Online;
                     Session.Verified = false;
                     Session.UserIndex = "";
+                    Session.OnlineUserId = "";
+                    Session.OnlineAccountMatches = null;
                     Session.LastMessage = probe.Detail;
+                    await RefreshOnlineIdentityAsync().ConfigureAwait(true);
                 }
                 else
                 {
@@ -372,12 +391,14 @@ namespace CampusLink.ViewModels
 
         private async Task<bool> TryRegisterMacAsync(bool silent)
         {
-            if (!Session.Verified || string.IsNullOrWhiteSpace(Session.UserIndex))
+            var canUseSession = !string.IsNullOrWhiteSpace(Session.UserIndex)
+                                && (Session.Verified || Session.OnlineAccountMatches == true);
+            if (!canUseSession)
             {
                 if (!silent)
                 {
                     Session.LastMessage = Session.IsOnline && !Session.Verified
-                        ? "当前是 MAC 免认证在线，没有登录会话，无法注册无感（需要先在门户完成一次账号登录）。"
+                        ? "当前是在线免认证状态，且没能确认在线账号就是本账号，暂不注册无感。"
                         : "需要先登录成功才能注册 MAC 无感。";
                 }
                 Refresh();
@@ -433,22 +454,80 @@ namespace CampusLink.ViewModels
             }
         }
 
+        /// <summary>
+        /// 已在线（MAC 免认证）时，从成功页拿 userIndex，再用 getOnlineUserInfo 确认当前在线的账号，
+        /// 并和本账号比对。这样"乱输密码也显示在线"的情况下能看出到底是谁在线。
+        /// </summary>
+        public async Task RefreshOnlineIdentityAsync()
+        {
+            var discovery = await Client.DiscoverOnlineSessionAsync(Tag).ConfigureAwait(true);
+            if (!discovery.Found)
+            {
+                Session.LastMessage = "网络已在线（MAC 免认证），但没能从成功页取到 userIndex：" + discovery.Message;
+                Refresh();
+                return;
+            }
+
+            Session.UserIndex = discovery.UserIndex;
+
+            var info = await Client.GetOnlineUserInfoAsync(discovery.UserIndex, Tag).ConfigureAwait(true);
+            Session.OnlineUserId = !string.IsNullOrWhiteSpace(info.UserId) ? info.UserId : discovery.DecodedUserId;
+            Session.OnlineUserIp = !string.IsNullOrWhiteSpace(info.UserIp) ? info.UserIp : discovery.DecodedIp;
+            Session.OnlineUserMac = info.UserMac;
+
+            if (!string.IsNullOrWhiteSpace(Session.OnlineUserId))
+            {
+                Session.OnlineAccountMatches = string.Equals(
+                    Session.OnlineUserId, Profile.UserId, StringComparison.OrdinalIgnoreCase);
+            }
+            else
+            {
+                Session.OnlineAccountMatches = null;
+            }
+
+            if (Session.OnlineAccountMatches == true)
+            {
+                Session.LastMessage = "当前在线账号：" + Session.OnlineUserId
+                                      + (string.IsNullOrWhiteSpace(Session.OnlineUserIp) ? "" : "（IP " + Session.OnlineUserIp + "）")
+                                      + "，与本账号一致（密码未被校验）";
+            }
+            else if (Session.OnlineAccountMatches == false)
+            {
+                Session.LastMessage = "⚠ 当前在线的是账号 " + Session.OnlineUserId
+                                      + "，不是本账号 " + Profile.UserId + "（密码未被校验）";
+            }
+            else
+            {
+                Session.LastMessage = "网络已在线（MAC 免认证），但没能识别出在线账号";
+            }
+
+            _log.Info("[" + Tag + "] " + Session.LastMessage, Tag);
+            Refresh();
+        }
+
         public async Task RefreshOnlineInfoAsync()
         {
             if (!await _busy.WaitAsync(0).ConfigureAwait(true)) return;
             try
             {
-                if (string.IsNullOrWhiteSpace(Session.UserIndex))
+                if (!Session.IsOnline)
                 {
-                    Session.LastMessage = "没有在线会话（MAC 免认证在线时查不到 userIndex）。";
+                    Session.LastMessage = "当前判定为离线，请先点「登录」或「探测」。";
                     Refresh();
+                    return;
+                }
+
+                if (!Session.Verified)
+                {
+                    await RefreshOnlineIdentityAsync().ConfigureAwait(true);
                     return;
                 }
 
                 var info = await Client.GetOnlineUserInfoAsync(Session.UserIndex, Tag).ConfigureAwait(true);
                 if (info.Success)
                 {
-                    Session.LastMessage = "在线信息：IP " + info.UserIp + " / MAC " + info.UserMac;
+                    Session.LastMessage = "在线信息：" + (string.IsNullOrWhiteSpace(info.UserName) ? "" : info.UserName + " / ")
+                                          + "账号 " + info.UserId + " / IP " + info.UserIp + " / MAC " + info.UserMac;
                 }
                 else
                 {

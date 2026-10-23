@@ -75,6 +75,11 @@ namespace CampusLink.Infrastructure
             "(password|passwd|pass|pwd|verifycode)(\\s*[=:]\\s*)([^&\\s\"',}]+)",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+        // userIndex 是「会话_IP_学号」的 hex，属于个人信息，日志里只留前 8 位
+        private static readonly Regex UserIndexPattern = new Regex(
+            "(userIndex\\s*[=:]\\s*['\"]?)([0-9a-fA-F]{16,})",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
         private readonly object _fileLock = new object();
         private readonly string _logDirectory;
         private readonly bool _writeToFile;
@@ -118,7 +123,8 @@ namespace CampusLink.Infrastructure
         public static string Redact(string text)
         {
             if (string.IsNullOrEmpty(text)) return text;
-            return SecretPattern.Replace(text, m => m.Groups[1].Value + m.Groups[2].Value + "***");
+            var masked = SecretPattern.Replace(text, m => m.Groups[1].Value + m.Groups[2].Value + "***");
+            return UserIndexPattern.Replace(masked, m => m.Groups[1].Value + m.Groups[2].Value.Substring(0, 8) + "…");
         }
 
         private void Add(LogLevel level, string message, string tag)

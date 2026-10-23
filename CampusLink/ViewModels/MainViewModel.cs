@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
@@ -19,6 +20,7 @@ namespace CampusLink.ViewModels
         private readonly AccountStore _store;
         private readonly KeepaliveService _keepalive = new KeepaliveService();
         private readonly AutoReconnectService _autoReconnect;
+        private readonly SemaphoreSlim _refreshGate = new SemaphoreSlim(1, 1);
 
         private AppSettings _settings;
         private AccountItemViewModel _selected;
@@ -336,6 +338,9 @@ namespace CampusLink.ViewModels
             OnPropertyChanged(nameof(EditorPasswordHint));
             UpdateTrayText();
             CommandManager.InvalidateRequerySuggested();
+
+            // 保存账号后主动同步一次它的状态
+            RefreshOneAccount(SelectedAccount, "账号已保存");
         }
 
         private void DeleteAccount()
@@ -534,8 +539,64 @@ namespace CampusLink.ViewModels
 
             foreach (var item in Accounts.ToList()) ReconcileKeepalive(item);
 
-            EditorHint = "设置已保存";
+            EditorHint = "设置已保存，正在同步账号状态…";
             UpdateTrayText();
+            RefreshAllAccounts("设置已保存");
+        }
+
+        /// <summary>保存设置/账号后主动探测一次状态，避免界面停留在旧状态。</summary>
+        private async void RefreshOneAccount(AccountItemViewModel item, string reason)
+        {
+            if (item == null) return;
+            if (!await _refreshGate.WaitAsync(0).ConfigureAwait(true)) return;
+            try
+            {
+                await Task.Delay(250).ConfigureAwait(true);
+                if (item.IsBusy) return;
+                await item.ProbeAsync().ConfigureAwait(true);
+                if (item.Profile.AutoLogin && item.Session.State == LinkState.NeedAuth)
+                {
+                    await item.LoginAsync(true).ConfigureAwait(true);
+                }
+                _log.Debug("已刷新账号状态（" + reason + "）：" + item.Tag, item.Tag);
+            }
+            catch (Exception ex)
+            {
+                _log.Warn("刷新账号状态失败：" + ex.Message, item.Tag);
+            }
+            finally
+            {
+                _refreshGate.Release();
+            }
+        }
+
+        private async void RefreshAllAccounts(string reason)
+        {
+            if (Accounts.Count == 0) return;
+            if (!await _refreshGate.WaitAsync(0).ConfigureAwait(true)) return;
+            try
+            {
+                await Task.Delay(250).ConfigureAwait(true);
+                foreach (var item in Accounts.ToList())
+                {
+                    if (item.IsBusy) continue;
+                    await item.ProbeAsync().ConfigureAwait(true);
+                    if (item.Profile.AutoLogin && item.Session.State == LinkState.NeedAuth)
+                    {
+                        await item.LoginAsync(true).ConfigureAwait(true);
+                    }
+                }
+                _log.Info("账号状态已刷新（" + reason + "）");
+                EditorHint = "账号状态已刷新";
+            }
+            catch (Exception ex)
+            {
+                _log.Warn("批量刷新账号状态失败：" + ex.Message);
+            }
+            finally
+            {
+                _refreshGate.Release();
+            }
         }
 
         private void UpdateTrayText()

@@ -396,13 +396,13 @@ namespace CoreTests
                     "http://127.0.0.1:" + portal.Port + "/api/latest", null, "1.0.0");
                 var info = service.CheckAsync().GetAwaiter().GetResult();
 
-                Check("API 检查到新版本并优先选 exe 附件", () =>
+                Check("API 检查到新版本并优先选整包 zip 附件", () =>
                 {
                     Assert(info.Checked, "应标记已检查");
                     Assert(info.HasUpdate, "应发现更新：" + info.Message);
                     Equal("9.9.9", info.LatestVersion, "最新版本");
-                    Assert(info.Asset != null && info.Asset.Name == "CampusLink.exe", "应优先选择 exe 附件");
-                    Assert(info.Asset.Url.EndsWith("CampusLink.exe"), "附件地址");
+                    Assert(info.Asset != null && info.Asset.Name == "CampusLink.zip", "应优先选择整包 zip 附件");
+                    Assert(info.Asset.Url.EndsWith("CampusLink.zip"), "附件地址");
                     Assert(info.ReleaseNotes.Contains("自动更新"), "发布说明");
                     Equal("https://github.com/Thomas455/CampusLink/releases/tag/v9.9.9", info.HtmlUrl, "发布页地址");
                 });
@@ -419,6 +419,22 @@ namespace CoreTests
                     Assert(info.Checked, "应标记已检查");
                     Assert(!info.HasUpdate, "不应提示更新");
                     Assert(info.Message.Contains("已是最新版本"), "提示文案：" + info.Message);
+                });
+            }
+
+            // 只上传了安装器：不能把 Setup.exe 当成可覆盖主程序的更新包
+            const string setupOnlyJson = "{\"tag_name\":\"v9.9.9\",\"name\":\"x\",\"body\":\"\",\"html_url\":\"x\"," +
+                                         "\"assets\":[{\"name\":\"CampusLink-Setup-9.9.9.exe\",\"browser_download_url\":\"https://example.com/CampusLink-Setup-9.9.9.exe\"}]}";
+            using (var portal = new MockPortal(req => MockResponse.Json(setupOnlyJson)))
+            {
+                var service = new UpdateService(log, "Thomas455/CampusLink",
+                    "http://127.0.0.1:" + portal.Port + "/api/latest", null, "1.0.0");
+                var info = service.CheckAsync().GetAwaiter().GetResult();
+                Check("只有安装器时不会自动更新覆盖主程序", () =>
+                {
+                    Assert(info.HasUpdate, "应发现版本更新");
+                    Assert(info.Asset == null, "安装器不应作为自动更新附件");
+                    Assert(info.Message.Contains("安装包附件"), "应提示缺少可自动更新的附件：" + info.Message);
                 });
             }
         }
@@ -500,16 +516,17 @@ namespace CoreTests
 
                 var reports = new List<double>();
                 var progress = new SyncProgress(reports);
-                var path = service.DownloadAsync(info, progress, System.Threading.CancellationToken.None)
+                var package = service.DownloadAsync(info, progress, System.Threading.CancellationToken.None)
                     .GetAwaiter().GetResult();
 
                 Check("下载更新包并上报进度", () =>
                 {
-                    Assert(File.Exists(path), "下载文件不存在");
-                    Assert(new FileInfo(path).Length == exeBytes.Length, "下载大小不一致");
+                    Assert(File.Exists(package.ExePath), "下载文件不存在");
+                    Assert(new FileInfo(package.ExePath).Length == exeBytes.Length, "下载大小不一致");
+                    Assert(!package.IsFullPackage, "单 exe 不应标记为整包");
                     Assert(reports.Count > 0, "没有进度回调");
                     Assert(reports[reports.Count - 1] >= 99.0, "进度应到 100，实际 " + reports[reports.Count - 1]);
-                    try { File.Delete(path); } catch { }
+                    try { File.Delete(package.ExePath); } catch { }
                 });
             }
 
@@ -517,6 +534,7 @@ namespace CoreTests
             var pkgDir = Path.Combine(Path.GetTempPath(), "campuslink-pkg-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(pkgDir);
             File.WriteAllBytes(Path.Combine(pkgDir, "CampusLink.exe"), new byte[] { 1, 2, 3, 4, 5 });
+            File.WriteAllBytes(Path.Combine(pkgDir, "Wpf.Ui.dll"), new byte[] { 6, 7, 8, 9 });
             var zipPath = Path.Combine(Path.GetTempPath(), "campuslink-test-" + Guid.NewGuid().ToString("N") + ".zip");
             System.IO.Compression.ZipFile.CreateFromDirectory(pkgDir, zipPath);
 
@@ -536,13 +554,15 @@ namespace CoreTests
                     }
                 };
 
-                var path = service.DownloadAsync(info, null, System.Threading.CancellationToken.None)
+                var pkg = service.DownloadAsync(info, null, System.Threading.CancellationToken.None)
                     .GetAwaiter().GetResult();
 
-                Check("zip 更新包自动解出 exe", () =>
+                Check("zip 更新包解出整目录（exe + 依赖 dll）", () =>
                 {
-                    Assert(path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase), "应返回 exe 路径：" + path);
-                    Assert(File.Exists(path), "解出的 exe 不存在");
+                    Assert(pkg.IsFullPackage, "zip 应标记为整包");
+                    Assert(pkg.ExePath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase), "应返回 exe 路径：" + pkg.ExePath);
+                    Assert(File.Exists(pkg.ExePath), "解出的 exe 不存在");
+                    Assert(File.Exists(Path.Combine(pkg.SourceDirectory, "Wpf.Ui.dll")), "整包应包含依赖 dll");
                 });
             }
 
@@ -649,14 +669,14 @@ namespace CoreTests
                 };
                 info.AlternateAssets.Add(new UpdateAsset { Name = "CampusLink.exe", Url = baseUrl + "/good.exe" });
 
-                var path = service.DownloadAsync(info, null, System.Threading.CancellationToken.None)
+                var pkg = service.DownloadAsync(info, null, System.Threading.CancellationToken.None)
                     .GetAwaiter().GetResult();
 
                 Check("主下载地址失败时自动尝试备选源附件", () =>
                 {
-                    Assert(File.Exists(path), "下载文件不存在");
-                    Equal("4", new FileInfo(path).Length.ToString(), "文件大小");
-                    try { File.Delete(path); } catch { }
+                    Assert(File.Exists(pkg.ExePath), "下载文件不存在");
+                    Equal("4", new FileInfo(pkg.ExePath).Length.ToString(), "文件大小");
+                    try { File.Delete(pkg.ExePath); } catch { }
                 });
             }
         }

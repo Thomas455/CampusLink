@@ -157,7 +157,8 @@ namespace CampusLink.ViewModels
             OnPropertyChanged(nameof(BannerText));
         }
 
-        public async Task<UpdateInfo> CheckAsync(bool manual)        {
+        public async Task<UpdateInfo> CheckAsync(bool manual)
+        {
             if (IsChecking) return Info;
             IsChecking = true;
             StatusText = "正在检查更新…";
@@ -169,13 +170,16 @@ namespace CampusLink.ViewModels
                     ? "发现新版本 " + info.VersionPair
                       + (string.IsNullOrWhiteSpace(info.SourceName) ? "" : "（来源 " + info.SourceName + "）")
                     : (string.IsNullOrWhiteSpace(info.Message) ? "已是最新版本" : info.Message);
-                CheckFinished?.Invoke(this, manual);
-                return info;
             }
             finally
             {
                 IsChecking = false;
             }
+
+            // 事件必须在 IsChecking 复位后触发：手动检查时界面会在事件里同步打开弹窗，
+            // 若此时 IsChecking 仍为 true，「立即更新」按钮会一直处于禁用状态
+            CheckFinished?.Invoke(this, manual);
+            return Info;
         }
 
         private async Task DownloadAndInstallAsync()
@@ -193,13 +197,13 @@ namespace CampusLink.ViewModels
                     ProgressText = value.ToString("0") + "%";
                 });
 
-                var path = await _service.DownloadAsync(_info, progress, CancellationToken.None).ConfigureAwait(true);
+                var package = await _service.DownloadAsync(_info, progress, CancellationToken.None).ConfigureAwait(true);
                 Progress = 100;
                 ProgressText = "100%";
-                StatusText = "下载完成，正在退出并替换程序…（会短暂关闭窗口）";
-                _log.Info("更新包已下载：" + path);
+                StatusText = "下载完成（" + (package.IsFullPackage ? "整包" : "单 exe") + "），正在退出并替换程序…（会短暂关闭窗口）";
+                _log.Info("更新包已就绪：" + (package.IsFullPackage ? package.SourceDirectory : package.ExePath));
 
-                _service.ApplyAndRestart(path, _log);
+                _service.ApplyAndRestart(package, _log);
                 _shutdown?.Invoke();
             }
             catch (Exception ex)

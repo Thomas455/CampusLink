@@ -10,6 +10,18 @@ namespace CampusLink.Models
         public long Size { get; set; }
     }
 
+    /// <summary>下载好的更新包：可能是完整目录（zip）或单个 exe。</summary>
+    public class UpdatePackage
+    {
+        public string ExePath { get; set; } = "";
+
+        /// <summary>待替换文件的来源目录（zip 解包目录；单 exe 时为 exe 所在目录）。</summary>
+        public string SourceDirectory { get; set; } = "";
+
+        /// <summary>true = zip 整包，需要整目录覆盖；false = 只有 exe。</summary>
+        public bool IsFullPackage { get; set; }
+    }
+
     /// <summary>一次更新检查的结果。</summary>
     public class UpdateInfo
     {

@@ -337,7 +337,7 @@ namespace CampusLink.Services
         private static UpdateAsset PickAsset(JArray assets)
         {
             if (assets == null) return null;
-            UpdateAsset zip = null;
+            UpdateAsset exe = null;
             foreach (var token in assets)
             {
                 var obj = token as JObject;
@@ -353,10 +353,15 @@ namespace CampusLink.Services
                     Size = JsonHelper.GetInt(obj, "size", 0)
                 };
                 var lower = name.ToLowerInvariant();
-                if (lower.EndsWith(".exe")) return asset;
-                if (lower.EndsWith(".zip") && zip == null) zip = asset;
+                // 整包（zip）优先；单 exe 只接受 CampusLink.exe，安装器/Setup 不能拿来覆盖主程序
+                if (lower.EndsWith(".zip")) return asset;
+                if (lower.EndsWith(".exe") && exe == null
+                    && !lower.Contains("setup") && !lower.Contains("install") && !lower.Contains("uninst"))
+                {
+                    exe = asset;
+                }
             }
-            return zip;
+            return exe;
         }
 
         private async Task TryRedirectAsync(UpdateSource source, UpdateInfo info)
@@ -466,8 +471,8 @@ namespace CampusLink.Services
 
         // ---------------------------------------------------------------- 下载
 
-        /// <summary>下载更新包并返回本地路径（zip 会在这里解出 exe）。</summary>
-        public async Task<string> DownloadAsync(UpdateInfo info, IProgress<double> progress, CancellationToken token)
+        /// <summary>下载更新包并返回安装信息（zip 解出整目录，单 exe 则只替换 exe）。</summary>
+        public async Task<UpdatePackage> DownloadAsync(UpdateInfo info, IProgress<double> progress, CancellationToken token)
         {
             if (info == null) throw new ArgumentNullException(nameof(info));
             if (info.Asset == null || string.IsNullOrWhiteSpace(info.Asset.Url))
@@ -476,14 +481,15 @@ namespace CampusLink.Services
             }
 
             var urls = new List<string> { info.Asset.Url };
-            if (info.Asset.Url.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+            // 同名不同后缀互备：有整包就试整包，没有就试单 exe
+            var alternate = AlternateExtension(info.Asset.Url);
+            if (alternate != null) urls.Add(alternate);
+            foreach (var other in info.AlternateAssets)
             {
-                urls.Add(info.Asset.Url.Substring(0, info.Asset.Url.Length - 4) + ".zip");
-            }
-            foreach (var alternate in info.AlternateAssets)
-            {
-                if (alternate == null || string.IsNullOrWhiteSpace(alternate.Url)) continue;
-                if (!urls.Contains(alternate.Url)) urls.Add(alternate.Url);
+                if (other == null || string.IsNullOrWhiteSpace(other.Url)) continue;
+                if (!urls.Contains(other.Url)) urls.Add(other.Url);
+                var otherAlternate = AlternateExtension(other.Url);
+                if (otherAlternate != null && !urls.Contains(otherAlternate)) urls.Add(otherAlternate);
             }
 
             Exception last = null;
@@ -491,8 +497,7 @@ namespace CampusLink.Services
             {
                 try
                 {
-                    var extension = Path.GetExtension(url);
-                    if (string.IsNullOrEmpty(extension)) extension = ".exe";
+                    var extension = ExtensionOf(url);
                     var target = Path.Combine(Path.GetTempPath(),
                         "CampusLink-update-" + info.LatestVersion + "-" + Guid.NewGuid().ToString("N").Substring(0, 6) + extension);
 
@@ -509,6 +514,23 @@ namespace CampusLink.Services
             }
 
             throw last ?? new InvalidOperationException("下载失败");
+        }
+
+        private static string AlternateExtension(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return null;
+            if (url.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                return url.Substring(0, url.Length - 4) + ".zip";
+            if (url.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                return url.Substring(0, url.Length - 4) + ".exe";
+            return null;
+        }
+
+        private static string ExtensionOf(string url)
+        {
+            if (url.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) return ".exe";
+            if (url.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) return ".zip";
+            return ".bin";
         }
 
         private static async Task DownloadFileAsync(string url, string targetPath, IProgress<double> progress, CancellationToken token, bool useSystemProxy)
@@ -546,48 +568,81 @@ namespace CampusLink.Services
             }
         }
 
-        private string PreparePackage(string downloadedPath)
+        private UpdatePackage PreparePackage(string downloadedPath)
         {
-            if (!downloadedPath.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) return downloadedPath;
+            if (!downloadedPath.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+            {
+                return new UpdatePackage
+                {
+                    ExePath = downloadedPath,
+                    SourceDirectory = Path.GetDirectoryName(downloadedPath) ?? "",
+                    IsFullPackage = false
+                };
+            }
 
             var extractDir = Path.Combine(Path.GetTempPath(),
                 "CampusLink-update-" + Guid.NewGuid().ToString("N").Substring(0, 8));
             Directory.CreateDirectory(extractDir);
             ZipFile.ExtractToDirectory(downloadedPath, extractDir);
 
-            foreach (var file in Directory.GetFiles(extractDir, "*.exe", SearchOption.AllDirectories))
+            var exe = Directory.GetFiles(extractDir, "CampusLink.exe", SearchOption.AllDirectories).FirstOrDefault()
+                      ?? Directory.GetFiles(extractDir, "*.exe", SearchOption.AllDirectories).FirstOrDefault();
+            if (exe == null) throw new FileNotFoundException("更新包里没有找到 CampusLink.exe");
+
+            return new UpdatePackage
             {
-                return file;
-            }
-            throw new FileNotFoundException("更新包里没有找到 CampusLink.exe");
+                ExePath = exe,
+                SourceDirectory = Path.GetDirectoryName(exe) ?? extractDir,
+                IsFullPackage = true
+            };
         }
 
         // ---------------------------------------------------------------- 安装
 
-        /// <summary>写一个带重试的更新脚本：等本进程退出 → 覆盖 exe → 重新启动。</summary>
-        public void ApplyAndRestart(string newExePath, LogService log)
+        /// <summary>
+        /// 写一个带重试的更新脚本：等本进程退出 →
+        /// 整包用 robocopy 覆盖整个安装目录（单 exe 则只覆盖 exe）→ 重新启动。
+        /// </summary>
+        public void ApplyAndRestart(UpdatePackage package, LogService log)
         {
+            if (package == null || string.IsNullOrWhiteSpace(package.ExePath)) return;
+
             var currentExe = Assembly.GetEntryAssembly()?.Location;
             if (string.IsNullOrWhiteSpace(currentExe) || !File.Exists(currentExe))
             {
                 throw new InvalidOperationException("无法定位当前程序的 exe 路径");
             }
 
+            var targetDir = Path.GetDirectoryName(currentExe) ?? "";
             var script = Path.Combine(Path.GetTempPath(), "campuslink-update-" + Guid.NewGuid().ToString("N") + ".cmd");
             var content = new StringBuilder()
                 .AppendLine("@echo off")
-                .AppendLine("ping -n 3 127.0.0.1 >nul")
-                .AppendLine("for /l %%i in (1,1,30) do (")
-                .AppendLine("  copy /y \"" + newExePath + "\" \"" + currentExe + "\" >nul 2>&1 && goto done")
-                .AppendLine("  ping -n 2 127.0.0.1 >nul")
-                .AppendLine(")")
-                .AppendLine(":done")
-                .AppendLine("start \"\" \"" + currentExe + "\"")
-                .AppendLine("del \"%~f0\"")
-                .ToString();
-            File.WriteAllText(script, content, Encoding.Default);
+                .AppendLine("ping -n 3 127.0.0.1 >nul");
 
-            log?.Info("开始替换程序：" + newExePath + " -> " + currentExe);
+            if (package.IsFullPackage && !string.IsNullOrWhiteSpace(package.SourceDirectory))
+            {
+                content.AppendLine("for /l %%i in (1,1,60) do (");
+                content.AppendLine("  robocopy \"" + package.SourceDirectory + "\" \"" + targetDir + "\" /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP >nul");
+                content.AppendLine("  if not errorlevel 8 goto done");
+                content.AppendLine("  ping -n 2 127.0.0.1 >nul");
+                content.AppendLine(")");
+            }
+            else
+            {
+                content.AppendLine("for /l %%i in (1,1,60) do (");
+                content.AppendLine("  copy /y \"" + package.ExePath + "\" \"" + currentExe + "\" >nul 2>&1 && goto done");
+                content.AppendLine("  ping -n 2 127.0.0.1 >nul");
+                content.AppendLine(")");
+            }
+
+            content.AppendLine(":done")
+                .AppendLine("start \"\" \"" + currentExe + "\"")
+                .AppendLine("del \"%~f0\"");
+
+            File.WriteAllText(script, content.ToString(), Encoding.Default);
+
+            log?.Info("开始替换程序（" + (package.IsFullPackage ? "整包" : "单 exe") + "）："
+                      + (package.IsFullPackage ? package.SourceDirectory : package.ExePath) + " -> " + targetDir);
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c \"" + script + "\"")
             {
                 UseShellExecute = true,

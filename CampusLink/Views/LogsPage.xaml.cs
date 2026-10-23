@@ -33,16 +33,7 @@ namespace CampusLink.Views
 
         private void OpenFolder_OnClick(object sender, RoutedEventArgs e)
         {
-            try
-            {
-                if (System.IO.Directory.Exists(_log.LogDirectory))
-                {
-                    Process.Start(new ProcessStartInfo(_log.LogDirectory) { UseShellExecute = true });
-                }
-            }
-            catch
-            {
-            }
+            Services.ShellHelper.OpenFolder(_log.LogDirectory, _log);
         }
     }
 }

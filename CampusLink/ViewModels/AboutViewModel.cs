@@ -86,16 +86,8 @@ namespace CampusLink.ViewModels
         private void OpenLink(SocialLink link)
         {
             if (link == null || string.IsNullOrWhiteSpace(link.Url)) return;
-            try
-            {
-                Process.Start(new ProcessStartInfo(link.Url) { UseShellExecute = true });
-                Status = "已在浏览器打开：" + link.Name;
-            }
-            catch (Exception ex)
-            {
-                Status = "打开失败：" + ex.Message;
-                _log.Warn("打开链接失败：" + link.Url + " -> " + ex.Message);
-            }
+            ShellHelper.OpenUrl(link.Url, _log);
+            Status = "已在浏览器打开：" + link.Name;
         }
 
         private void CopyLink(SocialLink link)
@@ -112,18 +104,9 @@ namespace CampusLink.ViewModels
             }
         }
 
-        private static void OpenFolder(string path)
+        private void OpenFolder(string path)
         {
-            try
-            {
-                if (System.IO.Directory.Exists(path))
-                {
-                    Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
-                }
-            }
-            catch
-            {
-            }
+            ShellHelper.OpenFolder(path, _log);
         }
     }
 }

@@ -4,6 +4,10 @@ using System.Windows.Input;
 
 namespace CampusLink.Infrastructure
 {
+    /// <summary>
+    /// 同步命令。CanExecuteChanged 走 CommandManager.RequerySuggested，
+    /// 这样选中项变化、界面交互后按钮会自动重新计算可用状态（否则按钮会一直灰着）。
+    /// </summary>
     public class RelayCommand : ICommand
     {
         private readonly Action _execute;
@@ -15,7 +19,11 @@ namespace CampusLink.Infrastructure
             _canExecute = canExecute;
         }
 
-        public event EventHandler CanExecuteChanged;
+        public event EventHandler CanExecuteChanged
+        {
+            add { CommandManager.RequerySuggested += value; }
+            remove { CommandManager.RequerySuggested -= value; }
+        }
 
         public bool CanExecute(object parameter)
         {
@@ -29,7 +37,7 @@ namespace CampusLink.Infrastructure
 
         public void RaiseCanExecuteChanged()
         {
-            CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+            CommandManager.InvalidateRequerySuggested();
         }
     }
 
@@ -50,7 +58,11 @@ namespace CampusLink.Infrastructure
             _onError = onError;
         }
 
-        public event EventHandler CanExecuteChanged;
+        public event EventHandler CanExecuteChanged
+        {
+            add { CommandManager.RequerySuggested += value; }
+            remove { CommandManager.RequerySuggested -= value; }
+        }
 
         public bool CanExecute(object parameter)
         {
@@ -79,7 +91,7 @@ namespace CampusLink.Infrastructure
 
         public void RaiseCanExecuteChanged()
         {
-            CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+            CommandManager.InvalidateRequerySuggested();
         }
     }
 }

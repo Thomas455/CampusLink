@@ -126,26 +126,12 @@ namespace CampusLink
 
         private void OpenDataFolder_OnClick(object sender, RoutedEventArgs e)
         {
-            OpenFolder(_viewModel.Settings.DataDirectory);
+            Services.ShellHelper.OpenFolder(_viewModel.Settings.DataDirectory, _viewModel.Log);
         }
 
         private void OpenLogFolder_OnClick(object sender, RoutedEventArgs e)
         {
-            OpenFolder(System.IO.Path.Combine(_viewModel.Settings.DataDirectory, "logs"));
-        }
-
-        private static void OpenFolder(string path)
-        {
-            try
-            {
-                if (System.IO.Directory.Exists(path))
-                {
-                    Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
-                }
-            }
-            catch
-            {
-            }
+            Services.ShellHelper.OpenFolder(_viewModel.Log.LogDirectory, _viewModel.Log);
         }
 
         private void RestoreWindow()
@@ -157,11 +143,19 @@ namespace CampusLink
             Topmost = false;
         }
 
+        /// <summary>第二个实例启动时通过广播消息调用，把已有窗口唤到前台。</summary>
+        public void RestoreFromExternal()
+        {
+            RestoreWindow();
+        }
+
         protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
         {
             if (!_explicitExit && _viewModel.Settings.CloseToTray)
             {
                 e.Cancel = true;
+                // 关闭前也落一次盘，避免配置丢失
+                _viewModel.PersistAccounts();
                 Hide();
                 if (!_balloonShown && _viewModel.Settings.ShowBalloonNotifications)
                 {

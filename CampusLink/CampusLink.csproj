@@ -143,12 +143,16 @@
     <Compile Include="Infrastructure\UiDispatcher.cs" />
     <Compile Include="Infrastructure\JsonHelper.cs" />
     <Compile Include="Infrastructure\RelayCommandOfT.cs" />
+    <Compile Include="Infrastructure\SingleInstance.cs" />
+    <Compile Include="Infrastructure\ValueConverters.cs" />
     <Compile Include="Models\AccountProfile.cs" />
     <Compile Include="Models\AppSettings.cs" />
     <Compile Include="Models\SessionState.cs" />
     <Compile Include="Models\PortalResults.cs" />
     <Compile Include="Services\HttpTransport.cs" />
     <Compile Include="Services\PortalClient.cs" />
+    <Compile Include="Services\NetworkAdapterService.cs" />
+    <Compile Include="Services\ShellHelper.cs" />
     <Compile Include="Services\RuijieRsa.cs" />
     <Compile Include="Services\AccountStore.cs" />
     <Compile Include="Services\KeepaliveService.cs" />

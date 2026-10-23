@@ -20,12 +20,17 @@ namespace CampusLink.Services
         private readonly string _accountsPath;
         private readonly string _settingsPath;
 
-        public AccountStore(LogService log)
+        public AccountStore(LogService log) : this(log, null)
+        {
+        }
+
+        /// <summary>baseDirectory 为空时用 %APPDATA%\CampusLink（测试可传入临时目录）。</summary>
+        public AccountStore(LogService log, string baseDirectory)
         {
             _log = log;
-            _directory = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "CampusLink");
+            _directory = string.IsNullOrWhiteSpace(baseDirectory)
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "CampusLink")
+                : baseDirectory;
             _accountsPath = Path.Combine(_directory, "accounts.json");
             _settingsPath = Path.Combine(_directory, "settings.json");
         }
@@ -73,10 +78,11 @@ namespace CampusLink.Services
                 }
                 var json = JsonConvert.SerializeObject(snapshot, Formatting.Indented);
                 WriteAtomic(_accountsPath, json);
+                _log?.Info("账号配置已保存（" + snapshot.Count + " 个）→ " + _accountsPath);
             }
             catch (Exception ex)
             {
-                _log.Error("保存账号配置失败", ex);
+                _log?.Error("保存账号配置失败", ex);
             }
         }
 

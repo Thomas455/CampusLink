@@ -15,7 +15,11 @@ namespace CampusLink.Infrastructure
             _canExecute = canExecute;
         }
 
-        public event EventHandler CanExecuteChanged;
+        public event EventHandler CanExecuteChanged
+        {
+            add { CommandManager.RequerySuggested += value; }
+            remove { CommandManager.RequerySuggested -= value; }
+        }
 
         public bool CanExecute(object parameter)
         {
@@ -32,7 +36,7 @@ namespace CampusLink.Infrastructure
 
         public void RaiseCanExecuteChanged()
         {
-            CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+            CommandManager.InvalidateRequerySuggested();
         }
     }
 }

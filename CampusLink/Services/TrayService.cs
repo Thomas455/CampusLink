@@ -1,29 +1,42 @@
 using System;
 using System.Drawing;
+using System.IO;
+using System.Windows;
 using System.Windows.Forms;
 
 namespace CampusLink.Services
 {
     /// <summary>
     /// 托盘图标与右键菜单。使用 WinForms NotifyIcon，稳定且没有额外依赖。
+    /// 图标取自内嵌的 Resources/app.ico，避免依赖 exe 图标提取（提取失败会显示空白）。
     /// </summary>
     public class TrayService : IDisposable
     {
+        private readonly Infrastructure.LogService _log;
         private NotifyIcon _icon;
+        private Icon _appIcon;
         private bool _disposed;
+
+        public TrayService(Infrastructure.LogService log)
+        {
+            _log = log;
+        }
 
         public event EventHandler ShowRequested;
         public event EventHandler LoginRequested;
         public event EventHandler LogoutRequested;
         public event EventHandler ExitRequested;
 
+        public bool IsVisible => _icon != null && _icon.Visible;
+
         public void Initialize()
         {
             if (_icon != null) return;
 
+            _appIcon = LoadAppIcon();
             _icon = new NotifyIcon
             {
-                Icon = LoadAppIcon(),
+                Icon = _appIcon,
                 Text = "CampusLink 校园网助手",
                 Visible = true
             };
@@ -52,10 +65,27 @@ namespace CampusLink.Services
             menu.Items.Add(exitItem);
 
             _icon.ContextMenuStrip = menu;
+            _log?.Info("托盘图标已创建（通知区域，可能被折叠到 ^ 里）");
         }
 
-        private static Icon LoadAppIcon()
+        private Icon LoadAppIcon()
         {
+            try
+            {
+                var resource = System.Windows.Application.GetResourceStream(new Uri("pack://application:,,,/Resources/app.ico"));
+                if (resource?.Stream != null)
+                {
+                    using (var stream = resource.Stream)
+                    {
+                        return new Icon(stream);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _log?.Warn("加载内嵌托盘图标失败：" + ex.Message);
+            }
+
             try
             {
                 var exe = System.Reflection.Assembly.GetEntryAssembly()?.Location;
@@ -68,6 +98,7 @@ namespace CampusLink.Services
             catch
             {
             }
+
             return SystemIcons.Application;
         }
 
@@ -89,7 +120,7 @@ namespace CampusLink.Services
             if (_icon == null) return;
             try
             {
-                _icon.ShowBalloonTip(3000, title, message, icon);
+                _icon.ShowBalloonTip(4000, title, message, icon);
             }
             catch
             {
@@ -110,6 +141,11 @@ namespace CampusLink.Services
                 _icon.Visible = false;
                 _icon.Dispose();
                 _icon = null;
+            }
+            if (_appIcon != null)
+            {
+                _appIcon.Dispose();
+                _appIcon = null;
             }
         }
     }

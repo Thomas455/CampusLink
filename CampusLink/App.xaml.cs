@@ -22,6 +22,14 @@ namespace CampusLink
         {
             base.OnStartup(e);
 
+            // 已有实例在跑：把它的窗口唤出来，本进程直接退出，避免多个托盘图标/两份配置互相覆盖
+            if (!SingleInstance.TryAcquire())
+            {
+                SingleInstance.NotifyExisting();
+                Shutdown();
+                return;
+            }
+
             UiDispatcher.Initialize(Dispatcher);
 
             DispatcherUnhandledException += OnDispatcherUnhandledException;
@@ -37,11 +45,12 @@ namespace CampusLink
             System.Diagnostics.PresentationTraceSources.DataBindingSource.Listeners.Add(new LogTraceListener(Log));
 #endif
 
-            Tray = new TrayService();
+            Tray = new TrayService(Log);
             Tray.Initialize();
 
             var window = new MainWindow(ViewModel, Tray);
             MainWindow = window;
+            window.SourceInitialized += (sender, args) => SingleInstance.Attach(window, window.RestoreFromExternal);
             window.Show();
 
             ViewModel.StartBackgroundServices();
@@ -51,7 +60,15 @@ namespace CampusLink
                 window.Hide();
             }
 
-            window.Loaded += (sender, args) => ViewModel.RunStartupAutoLogin();
+            window.Loaded += (sender, args) =>
+            {
+                ViewModel.RunStartupAutoLogin();
+                if (ViewModel.Settings.ShowBalloonNotifications)
+                {
+                    Tray.ShowBalloon("CampusLink 已启动",
+                        "托盘图标在通知区域（Windows 11 可能折叠在 ^ 里）。关闭窗口默认退出，可在设置里改成最小化到托盘。");
+                }
+            };
         }
 
         protected override void OnExit(ExitEventArgs e)

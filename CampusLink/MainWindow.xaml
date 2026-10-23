@@ -1,0 +1,71 @@
+<ui:FluentWindow x:Class="CampusLink.MainWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 xmlns:views="clr-namespace:CampusLink.Views"
+                 Title="CampusLink 校园网助手"
+                 Width="1120" Height="760" MinWidth="940" MinHeight="620"
+                 WindowBackdropType="Mica"
+                 WindowCornerPreference="Round"
+                 ExtendsContentIntoTitleBar="True"
+                 Background="{StaticResource PageBackgroundBrush}"
+                 FontFamily="{StaticResource AppFont}"
+                 Icon="/Resources/app.ico"
+                 Foreground="{StaticResource StrongTextBrush}">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar Grid.Row="0" Title="CampusLink · 校园网认证助手" ShowMaximize="True" />
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="196" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0" Margin="12,6,8,14">
+                <ui:Button x:Name="NavAccounts" Tag="accounts" Content="账号" Height="40" Margin="0,0,0,6"
+                           Icon="{ui:SymbolIcon Person24}" HorizontalAlignment="Stretch"
+                           HorizontalContentAlignment="Left" Click="Nav_OnClick" />
+                <ui:Button x:Name="NavSelfService" Tag="selfservice" Content="自助服务" Height="40" Margin="0,0,0,6"
+                           Icon="{ui:SymbolIcon ShieldCheckmark24}" HorizontalAlignment="Stretch"
+                           HorizontalContentAlignment="Left" Click="Nav_OnClick" />
+                <ui:Button x:Name="NavDiagnostics" Tag="diagnostics" Content="协议诊断" Height="40" Margin="0,0,0,6"
+                           Icon="{ui:SymbolIcon Bug24}" HorizontalAlignment="Stretch"
+                           HorizontalContentAlignment="Left" Click="Nav_OnClick" />
+                <ui:Button x:Name="NavLogs" Tag="logs" Content="运行日志" Height="40" Margin="0,0,0,6"
+                           Icon="{ui:SymbolIcon DocumentText24}" HorizontalAlignment="Stretch"
+                           HorizontalContentAlignment="Left" Click="Nav_OnClick" />
+                <ui:Button x:Name="NavSettings" Tag="settings" Content="设置" Height="40" Margin="0,0,0,6"
+                           Icon="{ui:SymbolIcon Settings24}" HorizontalAlignment="Stretch"
+                           HorizontalContentAlignment="Left" Click="Nav_OnClick" />
+                <ui:Button x:Name="NavAbout" Tag="about" Content="关于" Height="40" Margin="0,0,0,6"
+                           Icon="{ui:SymbolIcon Info24}" HorizontalAlignment="Stretch"
+                           HorizontalContentAlignment="Left" Click="Nav_OnClick" />
+
+                <Separator Margin="0,10,0,10" />
+
+                <ui:Button Content="打开数据目录" Height="36" HorizontalAlignment="Stretch"
+                           HorizontalContentAlignment="Left" Appearance="Transparent"
+                           Icon="{ui:SymbolIcon FolderOpen24}" Click="OpenDataFolder_OnClick" />
+                <ui:Button Content="打开日志目录" Height="36" HorizontalAlignment="Stretch"
+                           HorizontalContentAlignment="Left" Appearance="Transparent"
+                           Icon="{ui:SymbolIcon DocumentText24}" Click="OpenLogFolder_OnClick" />
+
+                <Border Margin="0,18,0,0" Padding="12" CornerRadius="8" Background="#141A26">
+                    <StackPanel>
+                        <TextBlock Text="使用提示" FontSize="12" FontWeight="SemiBold"
+                                   Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6" />
+                        <TextBlock Style="{StaticResource MutedTextStyle}"
+                                   Text="登录需要连在校园网内（未认证状态）。若一直提示 queryString 无效，请到「协议诊断」页重新探测。" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <ContentControl x:Name="PageHost" Grid.Column="1" Margin="8,4,16,16" />
+        </Grid>
+    </Grid>
+</ui:FluentWindow>

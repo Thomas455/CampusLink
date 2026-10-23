@@ -25,6 +25,8 @@
     <Reference Include="System.Net.Http" />
     <Reference Include="System.Security" />
     <Reference Include="System.Numerics" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
     <Reference Include="CampusLink">
       <HintPath>..\..\CampusLink\bin\Debug\CampusLink.exe</HintPath>
     </Reference>

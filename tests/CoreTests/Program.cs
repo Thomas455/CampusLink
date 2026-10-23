@@ -48,7 +48,7 @@ namespace CoreTests
 
         private static int Main()
         {
-            var log = new LogService();
+            var log = new LogService(false);
 
             Console.WriteLine("== 基础工具 ==");
             Check("EncodeUriComponent 普通字符", () =>

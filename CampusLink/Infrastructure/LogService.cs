@@ -77,13 +77,23 @@ namespace CampusLink.Infrastructure
 
         private readonly object _fileLock = new object();
         private readonly string _logDirectory;
+        private readonly bool _writeToFile;
 
-        public LogService()
+        public LogService() : this(true)
         {
+        }
+
+        /// <summary>writeToFile=false 用于测试，避免污染用户目录下的日志。</summary>
+        public LogService(bool writeToFile)
+        {
+            _writeToFile = writeToFile;
             _logDirectory = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "CampusLink", "logs");
-            try { Directory.CreateDirectory(_logDirectory); } catch { }
+            if (writeToFile)
+            {
+                try { Directory.CreateDirectory(_logDirectory); } catch { }
+            }
         }
 
         public ObservableCollection<LogEntry> Entries { get; } = new ObservableCollection<LogEntry>();
@@ -132,6 +142,7 @@ namespace CampusLink.Infrastructure
 
         private void WriteFile(LogEntry entry)
         {
+            if (!_writeToFile) return;
             try
             {
                 lock (_fileLock)

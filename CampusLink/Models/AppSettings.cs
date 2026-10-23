@@ -37,7 +37,10 @@ namespace CampusLink.Models
         /// <summary>自助服务系统地址。</summary>
         public string SelfServiceBaseUrl { get; set; } = "http://222.201.54.23:8080/selfservice";
 
-        /// <summary>默认密码模板，{uid} 会被替换为学号。</summary>
+        /// <summary>当前启用的学校预设 Id。</summary>
+        public string ActivePresetId { get; set; } = "";
+
+        /// <summary>默认密码模板，{uid} 会被替换为学号（旧字段，保留兼容；实际以学校预设为准）。</summary>
         public string DefaultPasswordTemplate { get; set; } = "{uid}@Gzhu";
 
         /// <summary>启动时自动检查 GitHub 更新。</summary>

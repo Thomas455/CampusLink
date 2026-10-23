@@ -15,7 +15,7 @@ namespace CampusLink
         private readonly MainViewModel _viewModel;
         private readonly TrayService _tray;
         private readonly AccountsPage _accountsPage;
-        private readonly SelfServicePage _selfServicePage;
+        private readonly InfoPage _infoPage;
         private readonly DiagnosticsPage _diagnosticsPage;
         private readonly LogsPage _logsPage;
         private readonly SettingsPage _settingsPage;
@@ -32,7 +32,7 @@ namespace CampusLink
             DataContext = viewModel;
 
             _accountsPage = new AccountsPage { DataContext = viewModel };
-            _selfServicePage = new SelfServicePage { DataContext = viewModel.SelfService };
+            _infoPage = new InfoPage { DataContext = viewModel.Info };
             _diagnosticsPage = new DiagnosticsPage { DataContext = viewModel.Diagnostics };
             _logsPage = new LogsPage(viewModel.Log);
             _settingsPage = new SettingsPage { DataContext = viewModel.Settings };
@@ -115,8 +115,8 @@ namespace CampusLink
             _viewModel.Log.Debug("切换页面：" + key);
             switch (key)
             {
-                case "selfservice":
-                    PageHost.Content = _selfServicePage;
+                case "info":
+                    PageHost.Content = _infoPage;
                     break;
                 case "diagnostics":
                     PageHost.Content = _diagnosticsPage;
@@ -142,7 +142,7 @@ namespace CampusLink
         private void Highlight(string key)
         {
             NavAccounts.Appearance = key == "accounts" ? ControlAppearance.Primary : ControlAppearance.Secondary;
-            NavSelfService.Appearance = key == "selfservice" ? ControlAppearance.Primary : ControlAppearance.Secondary;
+            NavInfo.Appearance = key == "info" ? ControlAppearance.Primary : ControlAppearance.Secondary;
             NavDiagnostics.Appearance = key == "diagnostics" ? ControlAppearance.Primary : ControlAppearance.Secondary;
             NavLogs.Appearance = key == "logs" ? ControlAppearance.Primary : ControlAppearance.Secondary;
             NavSettings.Appearance = key == "settings" ? ControlAppearance.Primary : ControlAppearance.Secondary;

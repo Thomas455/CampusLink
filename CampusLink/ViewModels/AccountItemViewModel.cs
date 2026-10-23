@@ -24,20 +24,23 @@ namespace CampusLink.ViewModels
     public class AccountItemViewModel : ObservableObject
     {
         private readonly LogService _log;
+        private readonly ToastService _toast;
         private readonly Func<AppSettings> _settings;
         private readonly SemaphoreSlim _busy = new SemaphoreSlim(1, 1);
         private NetworkAdapterInfo _adapter;
 
-        public AccountItemViewModel(AccountProfile profile, LogService log, Func<AppSettings> settings)
+        public AccountItemViewModel(AccountProfile profile, LogService log, Func<AppSettings> settings,
+            ToastService toast)
         {
             Profile = profile;
             _log = log;
+            _toast = toast;
             _settings = settings;
             RebuildClient();
 
             LoginCommand = new AsyncRelayCommand(() => LoginAsync(false), () => !IsBusy, OnCommandError);
             LogoutCommand = new AsyncRelayCommand(LogoutAsync, () => !IsBusy, OnCommandError);
-            ProbeCommand = new AsyncRelayCommand(ProbeAsync, () => !IsBusy, OnCommandError);
+            ProbeCommand = new AsyncRelayCommand(() => ProbeAsync(false), () => !IsBusy, OnCommandError);
             RegisterMacCommand = new AsyncRelayCommand(RegisterMacAsync, () => !IsBusy, OnCommandError);
             CancelMacCommand = new AsyncRelayCommand(CancelMacAsync, () => !IsBusy, OnCommandError);
             RefreshOnlineInfoCommand = new AsyncRelayCommand(RefreshOnlineInfoAsync, () => !IsBusy, OnCommandError);
@@ -53,6 +56,9 @@ namespace CampusLink.ViewModels
 
         public PortalClient Client { get; private set; }
 
+        /// <summary>最近一次 getOnlineUserInfo 的完整结果（信息页用）。</summary>
+        public OnlineUserInfoResult LastInfo { get; private set; }
+
         public ICommand LoginCommand { get; }
         public ICommand LogoutCommand { get; }
         public ICommand ProbeCommand { get; }
@@ -60,7 +66,8 @@ namespace CampusLink.ViewModels
         public ICommand CancelMacCommand { get; }
         public ICommand RefreshOnlineInfoCommand { get; }
 
-        public string Tag => Profile.Title;
+        /// <summary>日志/接口里用的标识：显示名称或学号后 3 位。</summary>
+        public string Tag => Profile.LogName;
 
         public string Title => Profile.Title;
 
@@ -101,7 +108,28 @@ namespace CampusLink.ViewModels
             }
         }
 
-        public string StateDetail => string.IsNullOrWhiteSpace(Session.LastMessage) ? "尚未检查" : Session.LastMessage;
+        /// <summary>卡片上的持久状态说明（过程性提示走右下角 Toast）。</summary>
+        public string StateDetail
+        {
+            get
+            {
+                switch (Session.State)
+                {
+                    case LinkState.Online:
+                        if (Session.Verified) return "已通过门户登录（账号密码已校验）";
+                        if (Session.OnlineAccountMatches == true) return "当前在线账号与本账号一致（密码未校验）";
+                        if (Session.OnlineAccountMatches == false)
+                            return "⚠ 当前在线的是其他账号 " + AccountProfile.MaskUserId(Session.OnlineUserId);
+                        return "网络已在线（MAC 免认证）";
+                    case LinkState.NeedAuth: return "需要认证：点「登录」";
+                    case LinkState.Probing: return "正在探测网络…";
+                    case LinkState.LoggingIn: return "正在登录…";
+                    case LinkState.Error: return string.IsNullOrWhiteSpace(Session.LastMessage) ? "操作失败" : Session.LastMessage;
+                    case LinkState.Offline: return "离线";
+                    default: return "尚未检查";
+                }
+            }
+        }
 
         public string MacText
         {
@@ -121,17 +149,9 @@ namespace CampusLink.ViewModels
                 if (!Session.IsOnline) return "未建立会话";
                 if (!Session.Verified)
                 {
-                    if (!string.IsNullOrWhiteSpace(Session.OnlineUserId))
-                    {
-                        var suffix = Session.OnlineAccountMatches == true ? "（本账号）"
-                            : Session.OnlineAccountMatches == false ? "（非本账号）" : "";
-                        return "在线账号 " + Session.OnlineUserId + suffix;
-                    }
-                    return "网络已通（MAC 免认证，账号未识别）";
+                    return Session.OnlineAccountMatches == true ? "在线账号与本账号一致" : "在线（未建立本地登录会话）";
                 }
-                var index = Session.UserIndex ?? "";
-                if (index.Length > 12) index = index.Substring(0, 12) + "...";
-                return "userIndex " + index + "  ·  保活 " + Session.KeepaliveInterval + "s";
+                return "保活 " + Session.KeepaliveInterval + "s";
             }
         }
 
@@ -169,7 +189,7 @@ namespace CampusLink.ViewModels
             Client = new PortalClient(Profile.PortalHost, _log, sourceIp);
         }
 
-        /// <summary>尝试登录；silent=true 时（自动重连）不弹验证码窗口。</summary>
+        /// <summary>尝试登录；silent=true 时（自动重连）不弹验证码窗口、成功不弹提示。</summary>
         public async Task<bool> LoginAsync(bool silent)
         {
             if (!await _busy.WaitAsync(0).ConfigureAwait(true)) return false;
@@ -186,6 +206,7 @@ namespace CampusLink.ViewModels
                 if (!probe.Ok)
                 {
                     Fail(LinkState.Error, probe.Detail);
+                    if (!silent) _toast.Error("登录失败：" + probe.Detail);
                     return false;
                 }
 
@@ -198,11 +219,28 @@ namespace CampusLink.ViewModels
                     Session.LastLoginTime = null;
                     Session.OnlineUserId = "";
                     Session.OnlineAccountMatches = null;
-                    Session.LastMessage = "当前网络已在线（AC 返回成功页），正在识别在线账号…";
+                    Session.LastMessage = "网络已在线（AC 返回成功页）";
                     Refresh();
 
-                    await RefreshOnlineIdentityAsync().ConfigureAwait(true);
+                    await RefreshOnlineIdentityAsync(silent: true).ConfigureAwait(true);
                     RaiseStateChanged();
+
+                    if (!silent)
+                    {
+                        if (Session.OnlineAccountMatches == true)
+                        {
+                            _toast.Info("网络已在线，当前在线账号与本账号一致；本次未校验密码", "无需登录");
+                        }
+                        else if (Session.OnlineAccountMatches == false)
+                        {
+                            _toast.Warning("当前在线的是账号 " + AccountProfile.MaskUserId(Session.OnlineUserId)
+                                           + "，不是本账号 " + AccountProfile.MaskUserId(Profile.UserId), "在线账号不一致");
+                        }
+                        else
+                        {
+                            _toast.Info("网络已在线（MAC 免认证），未能识别在线账号", "无需登录");
+                        }
+                    }
                     return true;
                 }
 
@@ -225,6 +263,7 @@ namespace CampusLink.ViewModels
                     if (string.IsNullOrEmpty(code))
                     {
                         Fail(LinkState.NeedAuth, "已取消验证码输入");
+                        _toast.Warning("已取消验证码输入", "登录未完成");
                         return false;
                     }
 
@@ -244,6 +283,16 @@ namespace CampusLink.ViewModels
                     _log.Info("[" + Tag + "] 登录成功", Tag);
                     Refresh();
                     RaiseStateChanged();
+                    if (!silent) _toast.Success("登录成功：" + Title, "已连接校园网");
+
+                    // 顺手拉一次完整信息，供「账号信息」页使用
+                    try
+                    {
+                        LastInfo = await Client.GetOnlineUserInfoAsync(Session.UserIndex, Tag).ConfigureAwait(true);
+                    }
+                    catch
+                    {
+                    }
 
                     if (Profile.AutoRegisterMac && !string.IsNullOrWhiteSpace(MacForAuth))
                     {
@@ -254,12 +303,14 @@ namespace CampusLink.ViewModels
 
                 Fail(LinkState.Error, login.Message);
                 LoginFailed?.Invoke(this, new LoginFailedEventArgs { Message = login.Message });
+                _toast.Error(login.Message, "登录失败");
                 return false;
             }
             catch (Exception ex)
             {
                 Fail(LinkState.Error, ex.Message);
                 _log.Error("[" + Tag + "] 登录异常", ex, Tag);
+                _toast.Error(ex.Message, "登录异常");
                 return false;
             }
             finally
@@ -290,7 +341,7 @@ namespace CampusLink.ViewModels
             var args = new CaptchaEventArgs
             {
                 Image = image,
-                Title = "登录 " + Tag,
+                Title = "登录 " + Title,
                 Message = string.IsNullOrWhiteSpace(login.Message) ? "本次登录需要验证码" : login.Message
             };
 
@@ -305,8 +356,9 @@ namespace CampusLink.ViewModels
             {
                 if (!Session.Verified || string.IsNullOrWhiteSpace(Session.UserIndex))
                 {
-                    Session.LastMessage = "当前没有本地登录会话。若是 MAC 免认证在线，需要「强制下线全部」才能踢掉。";
+                    Session.LastMessage = "当前没有本地登录会话";
                     Refresh();
+                    _toast.Warning("当前没有本地登录会话；MAC 免认证在线时无法单独下线", "无法下线");
                     return;
                 }
 
@@ -318,11 +370,13 @@ namespace CampusLink.ViewModels
                     Session.UserIndex = "";
                     Session.LastMessage = "已下线";
                     _log.Info("[" + Tag + "] 已下线", Tag);
+                    _toast.Success("已下线：" + Title, "已断开");
                 }
                 else
                 {
                     Session.State = LinkState.Error;
                     Session.LastMessage = "下线失败：" + result.Message;
+                    _toast.Error(result.Message, "下线失败");
                 }
                 Refresh();
                 RaiseStateChanged();
@@ -333,7 +387,8 @@ namespace CampusLink.ViewModels
             }
         }
 
-        public async Task ProbeAsync()
+        /// <summary>静默探测（silent=true 时不弹提示，自动重连/刷新用）。</summary>
+        public async Task ProbeAsync(bool silent = false)
         {
             if (!await _busy.WaitAsync(0).ConfigureAwait(true)) return;
             try
@@ -348,6 +403,7 @@ namespace CampusLink.ViewModels
                 {
                     Session.State = LinkState.Error;
                     Session.LastMessage = probe.Detail;
+                    if (!silent) _toast.Error(probe.Detail, "探测失败");
                 }
                 else if (probe.Online)
                 {
@@ -357,7 +413,8 @@ namespace CampusLink.ViewModels
                     Session.OnlineUserId = "";
                     Session.OnlineAccountMatches = null;
                     Session.LastMessage = probe.Detail;
-                    await RefreshOnlineIdentityAsync().ConfigureAwait(true);
+                    await RefreshOnlineIdentityAsync(silent: true).ConfigureAwait(true);
+                    if (!silent) _toast.Info("网络已在线（MAC 免认证）", "探测完成");
                 }
                 else
                 {
@@ -366,6 +423,7 @@ namespace CampusLink.ViewModels
                     Session.QueryString = probe.QueryString;
                     Session.DetectedMac = probe.Mac;
                     Session.LastMessage = probe.Detail;
+                    if (!silent) _toast.Warning("当前未认证，需要登录", "探测完成");
                 }
                 Refresh();
                 RaiseStateChanged();
@@ -381,7 +439,9 @@ namespace CampusLink.ViewModels
             if (!await _busy.WaitAsync(0).ConfigureAwait(true)) return;
             try
             {
-                await TryRegisterMacAsync(silent: false).ConfigureAwait(true);
+                var ok = await TryRegisterMacAsync(silent: false).ConfigureAwait(true);
+                if (ok) _toast.Success("MAC 无感注册成功：" + RuijieRsa.NormalizeMac(MacForAuth), "无感认证");
+                else _toast.Error(Session.LastMessage, "无感注册失败");
             }
             finally
             {
@@ -395,35 +455,29 @@ namespace CampusLink.ViewModels
                                 && (Session.Verified || Session.OnlineAccountMatches == true);
             if (!canUseSession)
             {
-                if (!silent)
-                {
-                    Session.LastMessage = Session.IsOnline && !Session.Verified
-                        ? "当前是在线免认证状态，且没能确认在线账号就是本账号，暂不注册无感。"
-                        : "需要先登录成功才能注册 MAC 无感。";
-                }
+                Session.LastMessage = Session.IsOnline && !Session.Verified
+                    ? "当前是在线免认证状态，且没能确认在线账号就是本账号，暂不注册无感。"
+                    : "需要先登录成功才能注册 MAC 无感。";
                 Refresh();
+                if (!silent) _toast.Warning(Session.LastMessage, "无法注册");
                 return false;
             }
 
             var mac = MacForAuth;
             if (string.IsNullOrWhiteSpace(mac))
             {
-                if (!silent) Session.LastMessage = "没有拿到 MAC，无法注册（请在账号里选择网卡）";
+                Session.LastMessage = "没有拿到 MAC，无法注册（请在账号里选择网卡）";
                 Refresh();
+                if (!silent) _toast.Error(Session.LastMessage, "无法注册");
                 return false;
             }
 
             var result = await Client.RegisterMacAsync(mac, Session.UserIndex, Tag).ConfigureAwait(true);
-            if (result.Success)
-            {
-                Session.LastMessage = "MAC 无感注册成功：" + RuijieRsa.NormalizeMac(mac);
-                _log.Info("[" + Tag + "] " + Session.LastMessage, Tag);
-            }
-            else
-            {
-                Session.LastMessage = "MAC 无感注册失败：" + result.Message;
-                _log.Warn("[" + Tag + "] " + Session.LastMessage, Tag);
-            }
+            Session.LastMessage = result.Success
+                ? "MAC 无感注册成功：" + RuijieRsa.NormalizeMac(mac)
+                : "MAC 无感注册失败：" + result.Message;
+            if (result.Success) _log.Info("[" + Tag + "] " + Session.LastMessage, Tag);
+            else _log.Warn("[" + Tag + "] " + Session.LastMessage, Tag);
             Refresh();
             return result.Success;
         }
@@ -438,6 +492,7 @@ namespace CampusLink.ViewModels
                 {
                     Session.LastMessage = "没有 MAC 可解绑（请在账号里选择网卡）";
                     Refresh();
+                    _toast.Error(Session.LastMessage, "无法解绑");
                     return;
                 }
 
@@ -447,6 +502,8 @@ namespace CampusLink.ViewModels
                     : "解绑失败：" + result.Message;
                 _log.Info("[" + Tag + "] " + Session.LastMessage, Tag);
                 Refresh();
+                if (result.Success) _toast.Success(Session.LastMessage, "已解绑");
+                else _toast.Error(result.Message, "解绑失败");
             }
             finally
             {
@@ -456,53 +513,86 @@ namespace CampusLink.ViewModels
 
         /// <summary>
         /// 已在线（MAC 免认证）时，从成功页拿 userIndex，再用 getOnlineUserInfo 确认当前在线的账号，
-        /// 并和本账号比对。这样"乱输密码也显示在线"的情况下能看出到底是谁在线。
+        /// 并和本账号比对。
         /// </summary>
-        public async Task RefreshOnlineIdentityAsync()
+        public async Task RefreshOnlineIdentityAsync(bool silent = true)
         {
             var discovery = await Client.DiscoverOnlineSessionAsync(Tag).ConfigureAwait(true);
             if (!discovery.Found)
             {
                 Session.LastMessage = "网络已在线（MAC 免认证），但没能从成功页取到 userIndex：" + discovery.Message;
                 Refresh();
+                if (!silent) _toast.Warning(Session.LastMessage, "在线账号识别失败");
                 return;
             }
 
             Session.UserIndex = discovery.UserIndex;
+            LastInfo = await Client.GetOnlineUserInfoAsync(discovery.UserIndex, Tag).ConfigureAwait(true);
 
-            var info = await Client.GetOnlineUserInfoAsync(discovery.UserIndex, Tag).ConfigureAwait(true);
-            Session.OnlineUserId = !string.IsNullOrWhiteSpace(info.UserId) ? info.UserId : discovery.DecodedUserId;
-            Session.OnlineUserIp = !string.IsNullOrWhiteSpace(info.UserIp) ? info.UserIp : discovery.DecodedIp;
-            Session.OnlineUserMac = info.UserMac;
+            Session.OnlineUserId = !string.IsNullOrWhiteSpace(LastInfo.UserId) ? LastInfo.UserId : discovery.DecodedUserId;
+            Session.OnlineUserIp = !string.IsNullOrWhiteSpace(LastInfo.UserIp) ? LastInfo.UserIp : discovery.DecodedIp;
+            Session.OnlineUserMac = LastInfo.UserMac;
 
-            if (!string.IsNullOrWhiteSpace(Session.OnlineUserId))
-            {
-                Session.OnlineAccountMatches = string.Equals(
-                    Session.OnlineUserId, Profile.UserId, StringComparison.OrdinalIgnoreCase);
-            }
-            else
-            {
-                Session.OnlineAccountMatches = null;
-            }
+            Session.OnlineAccountMatches = string.IsNullOrWhiteSpace(Session.OnlineUserId)
+                ? (bool?)null
+                : string.Equals(Session.OnlineUserId, Profile.UserId, StringComparison.OrdinalIgnoreCase);
 
-            if (Session.OnlineAccountMatches == true)
-            {
-                Session.LastMessage = "当前在线账号：" + Session.OnlineUserId
-                                      + (string.IsNullOrWhiteSpace(Session.OnlineUserIp) ? "" : "（IP " + Session.OnlineUserIp + "）")
-                                      + "，与本账号一致（密码未被校验）";
-            }
-            else if (Session.OnlineAccountMatches == false)
-            {
-                Session.LastMessage = "⚠ 当前在线的是账号 " + Session.OnlineUserId
-                                      + "，不是本账号 " + Profile.UserId + "（密码未被校验）";
-            }
-            else
-            {
-                Session.LastMessage = "网络已在线（MAC 免认证），但没能识别出在线账号";
-            }
+            Session.LastMessage = Session.OnlineAccountMatches == true
+                ? "当前在线账号与本账号一致"
+                : Session.OnlineAccountMatches == false
+                    ? "当前在线的是账号 " + AccountProfile.MaskUserId(Session.OnlineUserId)
+                    : "网络已在线，但没能识别出在线账号";
 
             _log.Info("[" + Tag + "] " + Session.LastMessage, Tag);
             Refresh();
+        }
+
+        /// <summary>信息页：拉取本账号的完整在线信息（含发现 userIndex）。</summary>
+        public async Task<OnlineUserInfoResult> FetchFullInfoAsync()
+        {
+            if (!await _busy.WaitAsync(0).ConfigureAwait(true))
+            {
+                return LastInfo;
+            }
+            try
+            {
+                if (string.IsNullOrWhiteSpace(Session.UserIndex))
+                {
+                    var discovery = await Client.DiscoverOnlineSessionAsync(Tag).ConfigureAwait(true);
+                    if (!discovery.Found)
+                    {
+                        _toast.Warning("拿不到 userIndex，无法查询信息：" + discovery.Message, "查询失败");
+                        return null;
+                    }
+                    Session.UserIndex = discovery.UserIndex;
+                }
+
+                var info = await Client.GetOnlineUserInfoAsync(Session.UserIndex, Tag).ConfigureAwait(true);
+                LastInfo = info;
+                if (info.Success)
+                {
+                    Session.OnlineUserId = info.UserId;
+                    Session.OnlineUserIp = info.UserIp;
+                    Session.OnlineUserMac = info.UserMac;
+                    if (!string.IsNullOrWhiteSpace(info.UserId))
+                    {
+                        Session.OnlineAccountMatches = string.Equals(info.UserId, Profile.UserId, StringComparison.OrdinalIgnoreCase);
+                    }
+                    Session.State = LinkState.Online;
+                }
+                Refresh();
+                return info;
+            }
+            catch (Exception ex)
+            {
+                _log.Warn("[" + Tag + "] 查询账号信息失败：" + ex.Message, Tag);
+                _toast.Error(ex.Message, "查询失败");
+                return null;
+            }
+            finally
+            {
+                _busy.Release();
+            }
         }
 
         public async Task RefreshOnlineInfoAsync()
@@ -514,26 +604,21 @@ namespace CampusLink.ViewModels
                 {
                     Session.LastMessage = "当前判定为离线，请先点「登录」或「探测」。";
                     Refresh();
+                    _toast.Warning(Session.LastMessage, "未在线");
                     return;
                 }
 
-                if (!Session.Verified)
+                await RefreshOnlineIdentityAsync(silent: true).ConfigureAwait(true);
+                var info = LastInfo;
+                if (info != null && info.Success)
                 {
-                    await RefreshOnlineIdentityAsync().ConfigureAwait(true);
-                    return;
-                }
-
-                var info = await Client.GetOnlineUserInfoAsync(Session.UserIndex, Tag).ConfigureAwait(true);
-                if (info.Success)
-                {
-                    Session.LastMessage = "在线信息：" + (string.IsNullOrWhiteSpace(info.UserName) ? "" : info.UserName + " / ")
-                                          + "账号 " + info.UserId + " / IP " + info.UserIp + " / MAC " + info.UserMac;
+                    _toast.Success("在线信息已刷新：" + (string.IsNullOrWhiteSpace(info.UserName) ? "" : info.UserName + " / ")
+                                   + "IP " + info.UserIp, "在线信息");
                 }
                 else
                 {
-                    Session.LastMessage = "在线信息查询失败：" + info.Message;
+                    _toast.Error(info == null ? "没有取得在线信息" : info.Message, "在线信息");
                 }
-                Refresh();
             }
             finally
             {
@@ -545,13 +630,13 @@ namespace CampusLink.ViewModels
         {
             if (success)
             {
-                Session.LastMessage = "保活正常（每 " + interval + " 秒）";
                 Session.LastCheckTime = DateTime.Now;
             }
             else
             {
                 Session.State = LinkState.Error;
                 Session.LastMessage = "保活失败：" + message;
+                _toast.Warning("会话保活失败：" + message, "网络可能已断开");
             }
             Refresh();
         }
@@ -602,6 +687,7 @@ namespace CampusLink.ViewModels
             _log.Error("[" + Tag + "] 操作异常", ex, Tag);
             Session.LastMessage = "操作异常：" + ex.Message;
             Refresh();
+            _toast.Error(ex.Message, "操作异常");
         }
     }
 }

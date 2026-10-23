@@ -2,9 +2,9 @@ using System.Windows.Controls;
 
 namespace CampusLink.Views
 {
-    public partial class SelfServicePage : UserControl
+    public partial class InfoPage : UserControl
     {
-        public SelfServicePage()
+        public InfoPage()
         {
             InitializeComponent();
         }

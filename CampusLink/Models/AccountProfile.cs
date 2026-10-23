@@ -45,6 +45,18 @@ namespace CampusLink.Models
         [JsonIgnore]
         public string Title => string.IsNullOrWhiteSpace(DisplayName) ? UserId : DisplayName;
 
+        /// <summary>日志里用的名字：优先显示名称，否则只保留学号后 3 位。</summary>
+        [JsonIgnore]
+        public string LogName => string.IsNullOrWhiteSpace(DisplayName) ? "账号" + MaskUserId(UserId) : DisplayName;
+
+        /// <summary>掩码学号：只保留后 3 位，例如 ***108。</summary>
+        public static string MaskUserId(string userId)
+        {
+            if (string.IsNullOrWhiteSpace(userId)) return "***";
+            var value = userId.Trim();
+            return value.Length <= 3 ? "***" : "***" + value.Substring(value.Length - 3);
+        }
+
         public AccountProfile Clone()
         {
             return (AccountProfile)MemberwiseClone();

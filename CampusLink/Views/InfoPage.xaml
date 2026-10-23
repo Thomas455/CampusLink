@@ -1,0 +1,104 @@
+<UserControl x:Class="CampusLink.Views.InfoPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             FontFamily="{StaticResource AppFont}">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Style="{StaticResource CardStyle}" Margin="0,0,0,12">
+            <StackPanel>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="账号信息" Style="{StaticResource SectionTitleStyle}" Margin="0,0,0,2" />
+                        <TextBlock Text="{Binding AccountTitle}" FontSize="16" FontWeight="SemiBold"
+                                   Foreground="{StaticResource StrongTextBrush}" />
+                        <TextBlock Text="{Binding AccountSubtitle}" Style="{StaticResource MutedTextStyle}" Margin="0,4,0,0" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
+                        <ui:Button Content="刷新信息" Appearance="Primary" Command="{Binding RefreshCommand}" Margin="0,0,8,0" />
+                        <ui:Button Content="复制信息" Appearance="Secondary" Command="{Binding CopyCommand}" Margin="0,0,8,0" />
+                        <ui:Button Content="原始响应" Appearance="Secondary" Command="{Binding ToggleRawCommand}" Margin="0,0,8,0" />
+                        <ui:Button Content="打开门户" Appearance="Transparent" Command="{Binding OpenPortalCommand}" Margin="0,0,8,0" />
+                        <ui:Button Content="自助服务" Appearance="Transparent" Command="{Binding OpenSelfServiceCommand}" />
+                    </StackPanel>
+                </Grid>
+
+                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                    <ui:ProgressRing IsIndeterminate="True" Width="16" Height="16" Margin="0,0,8,0"
+                                     Visibility="{Binding Busy, Converter={StaticResource BoolToVisibilityConverter}}" />
+                    <TextBlock Text="{Binding Status}" Style="{StaticResource MutedTextStyle}" VerticalAlignment="Center" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <Grid Grid.Row="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto"
+                          Visibility="{Binding HasData, Converter={StaticResource BoolToVisibilityConverter}}">
+                <ItemsControl ItemsSource="{Binding Sections}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource CardStyle}" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="SemiBold"
+                                               Foreground="{StaticResource AccentBrush}" Margin="0,0,0,8" />
+                                    <ItemsControl ItemsSource="{Binding Fields}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="0,3">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="120" />
+                                                        <ColumnDefinition Width="*" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="{Binding Label}" FontSize="12"
+                                                               Foreground="{StaticResource MutedTextBrush}" />
+                                                    <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12"
+                                                               Foreground="{StaticResource StrongTextBrush}"
+                                                               TextWrapping="Wrap" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+
+            <Border Grid.Row="0" Style="{StaticResource CardStyle}" VerticalAlignment="Top"
+                    Visibility="{Binding HasData, Converter={StaticResource InverseBoolToVisibilityConverter}}">
+                <StackPanel>
+                    <TextBlock Text="还没有可展示的信息" Style="{StaticResource SectionTitleStyle}" />
+                    <TextBlock Style="{StaticResource MutedTextStyle}"
+                               Text="点「刷新信息」会先用当前账号的在线会话（userIndex）调用 getOnlineUserInfo；如果还没有 userIndex，会尝试从门户成功页自动发现。" />
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Row="1" Style="{StaticResource CardStyle}" Margin="0,10,0,0"
+                    Visibility="{Binding ShowRaw, Converter={StaticResource BoolToVisibilityConverter}}">
+                <StackPanel>
+                    <TextBlock Text="原始响应" Style="{StaticResource SectionTitleStyle}" />
+                    <TextBox Text="{Binding RawJson, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True"
+                             TextWrapping="NoWrap" MaxHeight="240"
+                             VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                             FontFamily="Consolas" FontSize="12"
+                             Background="#0E1320" Foreground="#C9D6EA"
+                             BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="1" Padding="10" />
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

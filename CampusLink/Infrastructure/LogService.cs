@@ -1,6 +1,7 @@
 using System;
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -80,6 +81,11 @@ namespace CampusLink.Infrastructure
             "(userIndex\\s*[=:]\\s*['\"]?)([0-9a-fA-F]{16,})",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+        // 学号（userId）属于账号信息，日志里只保留后 3 位；operatorUserId 不处理
+        private static readonly Regex UserIdPattern = new Regex(
+            "(?<!operator)(userId\\s*[=:]\\s*['\"]?)([0-9A-Za-z_.@-]{2,})",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
         private readonly object _fileLock = new object();
         private readonly string _logDirectory;
         private readonly bool _writeToFile;
@@ -89,12 +95,14 @@ namespace CampusLink.Infrastructure
         }
 
         /// <summary>writeToFile=false 用于测试，避免污染用户目录下的日志。</summary>
-        public LogService(bool writeToFile)
+        public LogService(bool writeToFile, string logDirectory = null)
         {
             _writeToFile = writeToFile;
-            _logDirectory = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "CampusLink", "logs");
+            _logDirectory = string.IsNullOrWhiteSpace(logDirectory)
+                ? Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "CampusLink", "logs")
+                : logDirectory;
             if (writeToFile)
             {
                 try { Directory.CreateDirectory(_logDirectory); } catch { }
@@ -120,10 +128,66 @@ namespace CampusLink.Infrastructure
             UiDispatcher.Post(() => Entries.Clear());
         }
 
+        /// <summary>
+        /// 清洗历史日志：旧版本可能把完整学号写进 tag / userId= / userIndex=。
+        /// 每次启动调用一次，只改写确实包含敏感内容的文件。
+        /// </summary>
+        public void SanitizeHistory(System.Collections.Generic.IEnumerable<string> accountIds)
+        {
+            if (!_writeToFile) return;
+            try
+            {
+                var ids = (accountIds ?? new string[0])
+                    .Where(id => !string.IsNullOrWhiteSpace(id) && id.Trim().Length > 3)
+                    .Select(id => id.Trim())
+                    .Distinct()
+                    .OrderByDescending(id => id.Length)
+                    .ToList();
+                if (!Directory.Exists(_logDirectory)) return;
+
+                lock (_fileLock)
+                {
+                    foreach (var file in Directory.GetFiles(_logDirectory, "*.log"))
+                    {
+                        string text;
+                        try { text = File.ReadAllText(file); } catch { continue; }
+                        if (string.IsNullOrEmpty(text)) continue;
+
+                        var cleaned = text;
+                        foreach (var id in ids)
+                        {
+                            cleaned = cleaned.Replace(id, "***" + id.Substring(id.Length - 3));
+                        }
+                        cleaned = UserIdPattern.Replace(cleaned, m =>
+                        {
+                            var value = m.Groups[2].Value;
+                            return m.Groups[1].Value + (value.Length <= 3 ? "***" : "***" + value.Substring(value.Length - 3));
+                        });
+                        cleaned = UserIndexPattern.Replace(cleaned,
+                            m => m.Groups[1].Value + m.Groups[2].Value.Substring(0, 8) + "…");
+
+                        if (!string.Equals(cleaned, text, StringComparison.Ordinal))
+                        {
+                            try { File.WriteAllText(file, cleaned, new UTF8Encoding(false)); } catch { }
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // 历史日志清洗失败不影响启动
+            }
+        }
+
         public static string Redact(string text)
         {
             if (string.IsNullOrEmpty(text)) return text;
             var masked = SecretPattern.Replace(text, m => m.Groups[1].Value + m.Groups[2].Value + "***");
+            masked = UserIdPattern.Replace(masked, m =>
+            {
+                var value = m.Groups[2].Value;
+                return m.Groups[1].Value + (value.Length <= 3 ? "***" : "***" + value.Substring(value.Length - 3));
+            });
             return UserIndexPattern.Replace(masked, m => m.Groups[1].Value + m.Groups[2].Value.Substring(0, 8) + "…");
         }
 

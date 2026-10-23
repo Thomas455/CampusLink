@@ -80,7 +80,7 @@
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
-    <Page Include="Views\SelfServicePage.xaml">
+    <Page Include="Views\InfoPage.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
@@ -120,8 +120,8 @@
       <DependentUpon>AccountsPage.xaml</DependentUpon>
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="Views\SelfServicePage.xaml.cs">
-      <DependentUpon>SelfServicePage.xaml</DependentUpon>
+    <Compile Include="Views\InfoPage.xaml.cs">
+      <DependentUpon>InfoPage.xaml</DependentUpon>
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="Views\DiagnosticsPage.xaml.cs">
@@ -156,11 +156,14 @@
     <Compile Include="Infrastructure\RelayCommandOfT.cs" />
     <Compile Include="Infrastructure\SingleInstance.cs" />
     <Compile Include="Infrastructure\ValueConverters.cs" />
+    <Compile Include="Infrastructure\ToastService.cs" />
     <Compile Include="Models\AccountProfile.cs" />
     <Compile Include="Models\AppSettings.cs" />
     <Compile Include="Models\SessionState.cs" />
     <Compile Include="Models\PortalResults.cs" />
     <Compile Include="Models\UpdateInfo.cs" />
+    <Compile Include="Models\SchoolPreset.cs" />
+    <Compile Include="Models\AccountInfo.cs" />
     <Compile Include="Services\HttpTransport.cs" />
     <Compile Include="Services\PortalClient.cs" />
     <Compile Include="Services\NetworkAdapterService.cs" />
@@ -171,12 +174,12 @@
     <Compile Include="Services\AutoReconnectService.cs" />
     <Compile Include="Services\StartupService.cs" />
     <Compile Include="Services\TrayService.cs" />
-    <Compile Include="Services\SelfServiceClient.cs" />
+    <Compile Include="Services\PresetService.cs" />
     <Compile Include="Services\UpdateService.cs" />
     <Compile Include="ViewModels\MainViewModel.cs" />
     <Compile Include="ViewModels\AccountItemViewModel.cs" />
     <Compile Include="ViewModels\SettingsViewModel.cs" />
-    <Compile Include="ViewModels\SelfServiceViewModel.cs" />
+    <Compile Include="ViewModels\InfoViewModel.cs" />
     <Compile Include="ViewModels\DiagnosticsViewModel.cs" />
     <Compile Include="ViewModels\AboutViewModel.cs" />
     <Compile Include="ViewModels\UpdateViewModel.cs" />

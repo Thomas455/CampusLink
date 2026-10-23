@@ -60,6 +60,14 @@ namespace CampusLink.Models
         public string UserIp { get; set; } = "";
         public string UserMac { get; set; } = "";
         public string UserUrl { get; set; } = "";
+        public string UserGroup { get; set; } = "";
+        public string LoginType { get; set; } = "";
+        public string Service { get; set; } = "";
+        public string PortalIp { get; set; } = "";
+        public string Announcement { get; set; } = "";
+        public string WelcomeTip { get; set; } = "";
+        public JObject Raw { get; set; }
+        public List<AccountBallInfo> Balls { get; set; } = new List<AccountBallInfo>();
     }
 
     /// <summary>
@@ -99,21 +107,5 @@ namespace CampusLink.Models
         public string SystemNotice { get; set; } = "";
         public string ValidCodeUrl { get; set; } = "";
         public JObject Raw { get; set; }
-    }
-
-    public class SelfServiceLoginResult
-    {
-        public bool Success { get; set; }
-        public bool CaptchaWrong { get; set; }
-        public bool PasswordWrong { get; set; }
-        public string Message { get; set; } = "";
-        public string RawText { get; set; } = "";
-    }
-
-    public class SelfServiceChallenge
-    {
-        public byte[] CaptchaImage { get; set; }
-        public string PublicKey { get; set; } = "";
-        public string Detail { get; set; } = "";
     }
 }

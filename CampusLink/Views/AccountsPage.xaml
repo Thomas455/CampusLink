@@ -208,10 +208,6 @@
                 </ScrollViewer>
 
                 <StackPanel Grid.Row="1" Margin="0,10,0,0">
-                    <TextBlock Text="{Binding EditorError}" Foreground="{StaticResource BadBrush}"
-                               FontSize="12" TextWrapping="Wrap" />
-                    <TextBlock Text="{Binding EditorHint}" Foreground="{StaticResource GoodBrush}"
-                               FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0" />
                     <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                         <ui:Button Content="保存" Appearance="Primary" Command="{Binding SaveAccountCommand}" Margin="0,0,8,0" />
                         <ui:Button Content="取消" Appearance="Secondary" Command="{Binding CancelEditCommand}" Margin="0,0,8,0" />

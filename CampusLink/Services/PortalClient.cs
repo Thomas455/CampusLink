@@ -387,7 +387,8 @@ namespace CampusLink.Services
                        + "&validcode=" + DoubleEncode(validCode ?? "")
                        + "&passwordEncrypt=" + (encrypt ? "true" : "false");
 
-            _log.Info("登录请求：userId=" + account.UserId + "，passwordEncrypt=" + (encrypt ? "true" : "false")
+            _log.Info("登录请求：userId=" + AccountProfile.MaskUserId(account.UserId)
+                      + "，passwordEncrypt=" + (encrypt ? "true" : "false")
                       + (encrypt ? "（" + encryptReason + "）" : ""), tag);
 
             var response = await PostInterfaceAsync("login", body, tag).ConfigureAwait(false);
@@ -527,17 +528,57 @@ namespace CampusLink.Services
                 return result;
             }
 
+            result.Raw = json;
             result.UserId = JsonHelper.GetString(json, "userId", "");
             result.UserName = JsonHelper.GetString(json, "userName", "");
             result.UserIp = JsonHelper.GetString(json, "userIp", "");
             result.UserMac = JsonHelper.GetString(json, "userMac", "");
             result.UserUrl = JsonHelper.GetString(json, "userUrl", "");
+            result.UserGroup = JsonHelper.GetString(json, "userGroup", "");
+            result.LoginType = JsonHelper.GetString(json, "loginType", "");
+            result.Service = JsonHelper.GetString(json, "service", "");
+            result.PortalIp = JsonHelper.GetString(json, "portalIp", "");
+            result.Announcement = JsonHelper.GetString(json, "announcement", "");
+            result.WelcomeTip = JsonHelper.GetString(json, "welcomeTip", "");
+            result.Balls = ParseBalls(json["ballInfo"]);
 
             // 门户有时返回 result=wait（"用户信息不完整，请稍后重试"）但字段其实已经带回来了
             result.Success = string.Equals(JsonHelper.GetString(json, "result", "success"), "success", StringComparison.OrdinalIgnoreCase)
                              || !string.IsNullOrWhiteSpace(result.UserId);
             if (!result.Success) result.Message = JsonHelper.GetString(json, "message", "查询失败");
             return result;
+        }
+
+        /// <summary>ballInfo 是「JSON 数组的字符串」，解析成套餐/余额等条目。</summary>
+        private static List<AccountBallInfo> ParseBalls(JToken token)
+        {
+            var list = new List<AccountBallInfo>();
+            if (token == null) return list;
+
+            JArray array = token as JArray;
+            if (array == null && token.Type == JTokenType.String)
+            {
+                var raw = token.ToString();
+                if (raw.TrimStart().StartsWith("["))
+                {
+                    try { array = JArray.Parse(raw); } catch { }
+                }
+            }
+            if (array == null) return list;
+
+            foreach (var item in array)
+            {
+                var obj = item as JObject;
+                if (obj == null) continue;
+                list.Add(new AccountBallInfo
+                {
+                    DisplayName = JsonHelper.GetString(obj, "displayName", ""),
+                    Value = JsonHelper.GetString(obj, "value", ""),
+                    Type = JsonHelper.GetString(obj, "type", ""),
+                    Url = JsonHelper.GetString(obj, "url", "")
+                });
+            }
+            return list;
         }
 
         // ---------------------------------------------------------------- 底层

@@ -18,15 +18,15 @@ namespace CampusLink.ViewModels
     {
         private readonly LogService _log;
         private readonly AccountStore _store;
+        private readonly PresetService _presets;
         private readonly KeepaliveService _keepalive = new KeepaliveService();
         private readonly AutoReconnectService _autoReconnect;
         private readonly SemaphoreSlim _refreshGate = new SemaphoreSlim(1, 1);
 
         private AppSettings _settings;
+        private SchoolPreset _activePreset;
         private AccountItemViewModel _selected;
         private string _editorPassword = "";
-        private string _editorError = "";
-        private string _editorHint = "";
         private bool _isEditorOpen;
         private bool _editorIsNew = true;
         private string _editorTitle = "添加账号";
@@ -38,6 +38,16 @@ namespace CampusLink.ViewModels
             _log = log;
             _store = store;
             _settings = store.LoadSettings();
+            _presets = new PresetService(log, store.DataDirectory);
+            Toasts = new ToastService();
+
+            var presets = _presets.LoadAll();
+            _activePreset = presets.FirstOrDefault(p => p.Id == _settings.ActivePresetId) ?? presets.FirstOrDefault();
+            if (_activePreset != null && _settings.ActivePresetId != _activePreset.Id)
+            {
+                _settings.ActivePresetId = _activePreset.Id;
+                _store.SaveSettings(_settings);
+            }
 
             _autoReconnect = new AutoReconnectService(log);
             _autoReconnect.CheckDue += OnReconnectTick;
@@ -46,11 +56,11 @@ namespace CampusLink.ViewModels
             Accounts = new ObservableCollection<AccountItemViewModel>();
             Adapters = new ObservableCollection<NetworkAdapterInfo>();
 
-            Settings = new SettingsViewModel(_settings, log, OnSettingsSaved);
-            SelfService = new SelfServiceViewModel(log, () => _settings, Accounts);
+            Settings = new SettingsViewModel(_settings, log, Toasts, _presets, OnSettingsSaved, OnPresetActivated);
+            Info = new InfoViewModel(log, Toasts, () => ActivePreset);
             Diagnostics = new DiagnosticsViewModel(log, () => _settings);
             About = new AboutViewModel(log, _store.DataDirectory, _log.LogDirectory,
-                new UpdateViewModel(CreateUpdateService(log), log, () => Application.Current?.Shutdown()));
+                new UpdateViewModel(CreateUpdateService(log), log, () => Application.Current?.Shutdown(), Toasts));
 
             AddAccountCommand = new RelayCommand(OpenAddEditor);
             EditAccountCommand = new RelayCommand<AccountItemViewModel>(OpenEditEditor);
@@ -63,9 +73,12 @@ namespace CampusLink.ViewModels
             ProbeAllCommand = new AsyncRelayCommand(ProbeAllAsync, () => !IsAnyBusy(), OnCommandError);
             OpenDataFolderCommand = new RelayCommand(() => ShellHelper.OpenFolder(_store.DataDirectory, _log));
             OpenLogFolderCommand = new RelayCommand(() => ShellHelper.OpenFolder(_log.LogDirectory, _log));
+            OpenPresetFolderCommand = new RelayCommand(() => ShellHelper.OpenFolder(_presets.Directory, _log));
 
             ReloadAdapters();
             LoadAccounts();
+            // 清掉旧版本日志里可能残留的完整学号（一次性，按已知账号）
+            _log.SanitizeHistory(Accounts.Select(a => a.Profile.UserId).ToList());
             SelectFirstAccount();
         }
 
@@ -78,12 +91,18 @@ namespace CampusLink.ViewModels
 
         public LogService Log => _log;
 
+        public ToastService Toasts { get; }
+
         public SettingsViewModel Settings { get; }
-        public SelfServiceViewModel SelfService { get; }
+        public InfoViewModel Info { get; }
         public DiagnosticsViewModel Diagnostics { get; }
         public AboutViewModel About { get; }
 
         public UpdateViewModel Update => About.Update;
+
+        public SchoolPreset ActivePreset => _activePreset;
+
+        public string ActivePresetText => _activePreset == null ? "未启用学校预设" : _activePreset.Name;
 
         public ICommand AddAccountCommand { get; }
         public ICommand EditAccountCommand { get; }
@@ -96,6 +115,7 @@ namespace CampusLink.ViewModels
         public ICommand ProbeAllCommand { get; }
         public ICommand OpenDataFolderCommand { get; }
         public ICommand OpenLogFolderCommand { get; }
+        public ICommand OpenPresetFolderCommand { get; }
 
         // ---------------------------------------------------------------- 选中账号
 
@@ -106,7 +126,7 @@ namespace CampusLink.ViewModels
             {
                 if (!SetProperty(ref _selected, value)) return;
                 Diagnostics.Account = value;
-                if (SelfService != null && value != null) SelfService.SelectedAccount = value;
+                Info.Account = value;
                 OnPropertyChanged(nameof(HasSelection));
                 OnPropertyChanged(nameof(SelectionTitle));
                 UpdateTrayText();
@@ -169,18 +189,6 @@ namespace CampusLink.ViewModels
 
         public string EditorPasswordHint => _editorIsNew ? "新账号必填" : "留空表示不修改已有密码";
 
-        public string EditorError
-        {
-            get => _editorError;
-            set { _editorError = value; OnPropertyChanged(); }
-        }
-
-        public string EditorHint
-        {
-            get => _editorHint;
-            set { _editorHint = value; OnPropertyChanged(); }
-        }
-
         public void SetEditorPassword(string password)
         {
             _editorPassword = password ?? "";
@@ -194,7 +202,7 @@ namespace CampusLink.ViewModels
             EditorDisplayName = "";
             EditorUserId = "";
             EditorService = "";
-            EditorPortalHost = _settings.DefaultPortalHost;
+            EditorPortalHost = _activePreset == null ? _settings.DefaultPortalHost : _activePreset.PortalHost;
             EditorRemark = "";
             EditorAutoLogin = true;
             EditorAutoReconnect = true;
@@ -202,8 +210,6 @@ namespace CampusLink.ViewModels
             _editorPassword = "";
             SelectedAdapter = Adapters.FirstOrDefault(a => !string.IsNullOrWhiteSpace(a.Ipv4)) ?? Adapters.FirstOrDefault();
 
-            EditorError = "";
-            EditorHint = "";
             PushEditorFields();
             OnPropertyChanged(nameof(EditorPasswordHint));
         }
@@ -228,8 +234,6 @@ namespace CampusLink.ViewModels
             _editorPassword = "";
             SelectedAdapter = Adapters.FirstOrDefault(a => string.Equals(a.Id, profile.NicId, StringComparison.OrdinalIgnoreCase));
 
-            EditorError = "";
-            EditorHint = "";
             PushEditorFields();
             OnPropertyChanged(nameof(EditorPasswordHint));
         }
@@ -253,7 +257,6 @@ namespace CampusLink.ViewModels
         private void CloseEditor()
         {
             _editorPassword = "";
-            EditorError = "";
             IsEditorOpen = false;
             OnPropertyChanged(nameof(IsEditorOpen));
         }
@@ -263,12 +266,12 @@ namespace CampusLink.ViewModels
             var userId = (EditorUserId ?? "").Trim();
             if (userId.Length == 0)
             {
-                EditorError = "学号不能为空";
+                Toasts.Error("学号不能为空", "无法保存");
                 return;
             }
 
             var portalHost = string.IsNullOrWhiteSpace(EditorPortalHost)
-                ? _settings.DefaultPortalHost
+                ? (_activePreset == null ? _settings.DefaultPortalHost : _activePreset.PortalHost)
                 : EditorPortalHost.Trim();
             var nicId = SelectedAdapter == null ? "" : SelectedAdapter.Id;
 
@@ -276,7 +279,7 @@ namespace CampusLink.ViewModels
             {
                 if (string.IsNullOrWhiteSpace(_editorPassword))
                 {
-                    EditorError = "新账号必须填写密码";
+                    Toasts.Error("新账号必须填写密码", "无法保存");
                     return;
                 }
 
@@ -297,14 +300,15 @@ namespace CampusLink.ViewModels
                 var item = CreateItem(profile);
                 Accounts.Add(item);
                 SelectedAccount = item;
-                _log.Info("新增账号：" + profile.UserId);
+                _log.Info("新增账号：" + profile.LogName);
+                Toasts.Success("已添加账号：" + profile.Title, "保存成功");
             }
             else
             {
                 var existing = SelectedAccount;
                 if (existing == null)
                 {
-                    EditorError = "请先在左侧选择要编辑的账号";
+                    Toasts.Error("请先在左侧选择要编辑的账号", "无法保存");
                     return;
                 }
 
@@ -330,12 +334,12 @@ namespace CampusLink.ViewModels
                 }
 
                 existing.ReplaceProfile(updated);
-                _log.Info("更新账号：" + updated.UserId);
+                _log.Info("更新账号：" + updated.LogName);
+                Toasts.Success("已保存账号：" + updated.Title, "保存成功");
             }
 
             _editorPassword = "";
             PersistAccounts();
-            EditorHint = "已保存：" + userId;
             CloseEditor();
             OnPropertyChanged(nameof(SelectionTitle));
             OnPropertyChanged(nameof(EditorPasswordHint));
@@ -351,8 +355,7 @@ namespace CampusLink.ViewModels
             var item = SelectedAccount;
             if (item == null)
             {
-                _editorError = "请先选择要删除的账号";
-                OnPropertyChanged(nameof(EditorError));
+                Toasts.Error("请先选择要删除的账号", "无法删除");
                 return;
             }
 
@@ -372,7 +375,8 @@ namespace CampusLink.ViewModels
             SelectedAccount = Accounts.FirstOrDefault();
             PersistAccounts();
             UpdateTrayText();
-            _log.Info("删除账号：" + item.Profile.UserId);
+            _log.Info("删除账号：" + item.Profile.LogName);
+            Toasts.Success("已删除账号：" + item.Title, "删除成功");
             CommandManager.InvalidateRequerySuggested();
         }
 
@@ -385,7 +389,7 @@ namespace CampusLink.ViewModels
 
             if (string.IsNullOrWhiteSpace(item.Profile.Password))
             {
-                EditorHint = "没有保存密码，无法按账号密码强制下线";
+                Toasts.Warning("没有保存密码，无法按账号密码强制下线", "无法操作");
                 return;
             }
 
@@ -400,12 +404,12 @@ namespace CampusLink.ViewModels
             {
                 _keepalive.Stop(item.Profile.Id);
                 item.MarkOffline("已强制下线该账号所有会话");
-                EditorHint = "已强制下线：" + item.Title;
+                Toasts.Success("已强制下线：" + item.Title, "已下线");
                 UpdateTrayText();
             }
             else
             {
-                EditorHint = "强制下线失败：" + result.Message;
+                Toasts.Error(result.Message, "强制下线失败");
             }
         }
 
@@ -414,7 +418,7 @@ namespace CampusLink.ViewModels
             var items = Accounts.ToList();
             if (items.Count == 0)
             {
-                EditorHint = "没有可登录的账号";
+                Toasts.Warning("没有可登录的账号", "批量登录");
                 return;
             }
 
@@ -429,8 +433,9 @@ namespace CampusLink.ViewModels
                 }
             }
 
-            EditorHint = "批量结果：" + online + "/" + items.Count + " 网络可用，其中 " + verified + " 个账号真正通过门户校验";
-            _log.Info(EditorHint);
+            _log.Info("批量登录完成：" + online + "/" + items.Count + " 网络可用，其中 " + verified + " 个通过门户校验");
+            Toasts.Success("批量登录：" + online + "/" + items.Count + " 网络可用，其中 " + verified + " 个通过门户校验",
+                "批量完成");
             UpdateTrayText();
         }
 
@@ -438,9 +443,9 @@ namespace CampusLink.ViewModels
         {
             foreach (var item in Accounts.ToList())
             {
-                await item.ProbeAsync().ConfigureAwait(true);
+                await item.ProbeAsync(silent: true).ConfigureAwait(true);
             }
-            EditorHint = "全部账号状态已刷新";
+            Toasts.Success("全部账号状态已刷新", "刷新完成");
             UpdateTrayText();
         }
 
@@ -517,7 +522,7 @@ namespace CampusLink.ViewModels
 
                 try
                 {
-                    await item.ProbeAsync().ConfigureAwait(true);
+                    await item.ProbeAsync(silent: true).ConfigureAwait(true);
                     if (item.Session.State == LinkState.NeedAuth)
                     {
                         _log.Info("检测到掉线，自动重连：" + item.Tag, item.Tag);
@@ -571,13 +576,27 @@ namespace CampusLink.ViewModels
             _settings = settings;
             _store.SaveSettings(_settings);
 
+            var preset = _presets.Find(_settings.ActivePresetId);
+            if (preset != null) _activePreset = preset;
+            OnPropertyChanged(nameof(ActivePreset));
+            OnPropertyChanged(nameof(ActivePresetText));
+
             if (_settings.AutoReconnectEnabled) _autoReconnect.UpdateInterval(_settings.ReconnectCheckSeconds);
 
             foreach (var item in Accounts.ToList()) ReconcileKeepalive(item);
 
-            EditorHint = "设置已保存，正在同步账号状态…";
-            UpdateTrayText();
             RefreshAllAccounts("设置已保存");
+        }
+
+        private void OnPresetActivated(SchoolPreset preset)
+        {
+            if (preset == null) return;
+            _activePreset = preset;
+            _settings.ActivePresetId = preset.Id;
+            _store.SaveSettings(_settings);
+            OnPropertyChanged(nameof(ActivePreset));
+            OnPropertyChanged(nameof(ActivePresetText));
+            Toasts.Info("新建账号时会使用该预设的门户地址：" + preset.PortalHost, "已切换学校预设");
         }
 
         /// <summary>保存设置/账号后主动探测一次状态，避免界面停留在旧状态。</summary>
@@ -589,7 +608,7 @@ namespace CampusLink.ViewModels
             {
                 await Task.Delay(250).ConfigureAwait(true);
                 if (item.IsBusy) return;
-                await item.ProbeAsync().ConfigureAwait(true);
+                await item.ProbeAsync(silent: true).ConfigureAwait(true);
                 if (item.Profile.AutoLogin && item.Session.State == LinkState.NeedAuth)
                 {
                     await item.LoginAsync(true).ConfigureAwait(true);
@@ -616,14 +635,14 @@ namespace CampusLink.ViewModels
                 foreach (var item in Accounts.ToList())
                 {
                     if (item.IsBusy) continue;
-                    await item.ProbeAsync().ConfigureAwait(true);
+                    await item.ProbeAsync(silent: true).ConfigureAwait(true);
                     if (item.Profile.AutoLogin && item.Session.State == LinkState.NeedAuth)
                     {
                         await item.LoginAsync(true).ConfigureAwait(true);
                     }
                 }
                 _log.Info("账号状态已刷新（" + reason + "）");
-                EditorHint = "账号状态已刷新";
+                Toasts.Success("账号状态已刷新", "刷新完成");
             }
             catch (Exception ex)
             {
@@ -646,10 +665,6 @@ namespace CampusLink.ViewModels
             else
             {
                 text = "CampusLink · " + item.Title + " · " + item.StateText;
-                if (!string.IsNullOrWhiteSpace(item.Session.LastMessage))
-                {
-                    text += " · " + item.Session.LastMessage;
-                }
             }
             TrayTextChanged?.Invoke(text);
         }
@@ -657,7 +672,7 @@ namespace CampusLink.ViewModels
         private void OnCommandError(Exception ex)
         {
             _log.Error("命令执行异常", ex);
-            EditorHint = "操作异常：" + ex.Message;
+            Toasts.Error(ex.Message, "操作异常");
         }
 
         /// <summary>
@@ -712,12 +727,16 @@ namespace CampusLink.ViewModels
 
         private AccountItemViewModel CreateItem(AccountProfile profile)
         {
-            var item = new AccountItemViewModel(profile, _log, () => _settings);
+            var item = new AccountItemViewModel(profile, _log, () => _settings, Toasts);
             item.CaptchaRequested += (sender, args) => CaptchaRequested?.Invoke(this, args);
             item.StateChanged += (sender, args) =>
             {
                 ReconcileKeepalive(item);
                 UpdateTrayText();
+                if (item == SelectedAccount && item.IsOnline)
+                {
+                    _ = Info.LoadAsync(true);
+                }
             };
             item.LoginFailed += (sender, args) =>
             {

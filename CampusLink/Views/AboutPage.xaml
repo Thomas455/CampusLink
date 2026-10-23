@@ -146,7 +146,7 @@
                     <TextBlock Style="{StaticResource MutedTextStyle}" Margin="0,4,0,0"
                                Text="· 认证请求没有签名和 token，账号密码务必不要提交到公开仓库；本机保存的密码使用 DPAPI（当前用户）加密。" />
                     <TextBlock Style="{StaticResource MutedTextStyle}" Margin="0,4,0,0"
-                               Text="· 自助服务的验证码需要人工识别，「改密 / 查余额」等业务页面未做接口化，请在浏览器里操作。" />
+                               Text="· 「账号信息」页会根据 userIndex 调 getOnlineUserInfo，把账号、网络、套餐/余额等字段结构化展示。" />
                     <TextBlock Style="{StaticResource MutedTextStyle}" Margin="0,4,0,0"
                                Text="· 生产环境行为（passwordEncrypt 真实取值、服务列表、验证码策略）以现场返回为准，可用「协议诊断」页核对。" />
                 </StackPanel>

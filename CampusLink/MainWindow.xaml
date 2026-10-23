@@ -13,12 +13,13 @@
                  Icon="/Resources/app.ico"
                  Foreground="{StaticResource StrongTextBrush}">
     <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-        </Grid.RowDefinitions>
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
 
-        <ui:TitleBar Grid.Row="0" Title="CampusLink · 校园网认证助手" ShowMaximize="True" />
+            <ui:TitleBar Grid.Row="0" Title="CampusLink · 校园网认证助手" ShowMaximize="True" />
 
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
@@ -30,8 +31,8 @@
                 <ui:Button x:Name="NavAccounts" Tag="accounts" Content="账号" Height="40" Margin="0,0,0,6"
                            Icon="{ui:SymbolIcon Person24}" HorizontalAlignment="Stretch"
                            HorizontalContentAlignment="Left" Click="Nav_OnClick" />
-                <ui:Button x:Name="NavSelfService" Tag="selfservice" Content="自助服务" Height="40" Margin="0,0,0,6"
-                           Icon="{ui:SymbolIcon ShieldCheckmark24}" HorizontalAlignment="Stretch"
+                <ui:Button x:Name="NavInfo" Tag="info" Content="账号信息" Height="40" Margin="0,0,0,6"
+                           Icon="{ui:SymbolIcon DataUsage24}" HorizontalAlignment="Stretch"
                            HorizontalContentAlignment="Left" Click="Nav_OnClick" />
                 <ui:Button x:Name="NavDiagnostics" Tag="diagnostics" Content="协议诊断" Height="40" Margin="0,0,0,6"
                            Icon="{ui:SymbolIcon Bug24}" HorizontalAlignment="Stretch"
@@ -94,5 +95,48 @@
                 <ContentControl x:Name="PageHost" Grid.Row="1" />
             </Grid>
         </Grid>
+        </Grid>
+
+        <!-- 右下角通知（绿/黄/红/蓝分级） -->
+        <ItemsControl ItemsSource="{Binding Toasts.Items}" Panel.ZIndex="20"
+                      HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                      Margin="0,0,26,22" Width="380">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <Border Background="{Binding Background}" BorderBrush="{Binding Accent}"
+                            BorderThickness="1" CornerRadius="10" Padding="12,10" Margin="0,8,0,0"
+                            Opacity="0">
+                        <Border.Triggers>
+                            <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                         From="0" To="1" Duration="0:0:0.18" />
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </EventTrigger>
+                        </Border.Triggers>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Border Width="4" CornerRadius="2" Background="{Binding Accent}" Margin="0,0,10,0" />
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="{Binding Title}" FontSize="12" FontWeight="SemiBold"
+                                           Foreground="{StaticResource StrongTextBrush}" />
+                                <TextBlock Text="{Binding Message}" FontSize="12" TextWrapping="Wrap"
+                                           Foreground="{StaticResource MutedTextBrush}" Margin="0,2,0,0" />
+                            </StackPanel>
+                            <ui:Button Grid.Column="2" Content="✕" Width="24" Height="24" Padding="0"
+                                       FontSize="10" Appearance="Transparent" VerticalAlignment="Top"
+                                       Command="{Binding DataContext.Toasts.DismissCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                       CommandParameter="{Binding}" />
+                        </Grid>
+                    </Border>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
     </Grid>
 </ui:FluentWindow>

@@ -1,11 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
+using System.Linq;
 using System.Numerics;
 using System.Text;
 using CampusLink.Infrastructure;
 using CampusLink.Models;
 using CampusLink.Services;
+using CampusLink.ViewModels;
 using Newtonsoft.Json;
 
 namespace CoreTests
@@ -163,9 +166,142 @@ namespace CoreTests
             Console.WriteLine("== 自助服务（mock） ==");
             TestSelfService(log);
 
+            Console.WriteLine("== 账号持久化 / 会话语义 ==");
+            TestPersistence(log);
+            TestOnlineWithoutLogin(log);
+            TestVerifiedLogin(log);
+            TestAdapters();
+
             Console.WriteLine();
             Console.WriteLine("通过 " + _passed + " 项，失败 " + _failed + " 项");
             return _failed == 0 ? 0 : 1;
+        }
+
+        private static void TestPersistence(LogService log)
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "campuslink-test-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                Directory.CreateDirectory(dir);
+                var store = new AccountStore(log, dir);
+                var vm = new MainViewModel(log, store);
+
+                vm.AddAccountCommand.Execute(null);
+                vm.EditorDisplayName = "测试账号";
+                vm.EditorUserId = "2023123456";
+                vm.SetEditorPassword("P@ss-中文-123");
+                vm.EditorPortalHost = "222.201.54.55";
+                vm.SelectedAdapter = vm.Adapters.FirstOrDefault();
+                vm.SaveAccountCommand.Execute(null);
+
+                Check("添加账号后立即落盘且可重新加载", () =>
+                {
+                    Assert(vm.Accounts.Count == 1, "内存里没有账号");
+                    Assert(File.Exists(Path.Combine(dir, "accounts.json")), "accounts.json 没有生成");
+
+                    var reloaded = new MainViewModel(log, new AccountStore(log, dir));
+                    Assert(reloaded.Accounts.Count == 1, "重新加载后账号数为 " + reloaded.Accounts.Count);
+                    Equal("2023123456", reloaded.Accounts[0].Profile.UserId, "学号");
+                    Equal("P@ss-中文-123", reloaded.Accounts[0].Profile.Password, "密码（DPAPI 解密）");
+                    Equal(vm.SelectedAdapter == null ? "" : vm.SelectedAdapter.Id,
+                        reloaded.Accounts[0].Profile.NicId, "网卡 Id");
+                });
+
+                Check("删除账号后配置也会持久化", () =>
+                {
+                    var reloaded = new MainViewModel(log, new AccountStore(log, dir));
+                    var persisted = new AccountStore(log, dir);
+                    persisted.SaveAccounts(Enumerable.Empty<AccountProfile>());
+                    var after = new MainViewModel(log, new AccountStore(log, dir));
+                    Assert(after.Accounts.Count == 0, "删除后仍有账号：" + after.Accounts.Count);
+                });
+
+                Check("旧版本配置文件（含 Mac/SourceIp 字段）仍能加载", () =>
+                {
+                    var legacy = "[{\"Id\":\"old1\",\"UserId\":\"2020000000\",\"PasswordCipher\":\"\",\"Mac\":\"AABBCCDDEEFF\",\"SourceIp\":\"192.168.1.5\",\"PortalHost\":\"222.201.54.55\"}]";
+                    File.WriteAllText(Path.Combine(dir, "accounts.json"), legacy, new UTF8Encoding(false));
+                    var loaded = new AccountStore(log, dir).LoadAccounts();
+                    Assert(loaded.Count == 1, "旧配置没有加载出来");
+                    Equal("2020000000", loaded[0].UserId, "旧配置学号");
+                });
+            }
+            finally
+            {
+                try { Directory.Delete(dir, true); } catch { }
+            }
+        }
+
+        private static void TestOnlineWithoutLogin(LogService log)
+        {
+            using (var portal = new MockPortal(req => MockResponse.Redirect(Absolute(req, "/eportal/redirectortosuccess.jsp"))))
+            {
+                var settings = new AppSettings { ProbeUrls = "http://127.0.0.1:" + portal.Port + "/" };
+                var profile = new AccountProfile
+                {
+                    UserId = "2023123456",
+                    Password = "随便乱输的密码",
+                    PortalHost = "127.0.0.1:" + portal.Port
+                };
+                var item = new AccountItemViewModel(profile, log, () => settings);
+                var result = item.LoginAsync(false).GetAwaiter().GetResult();
+
+                Check("探测到已在线时不算登录成功（不校验账号密码）", () =>
+                {
+                    Assert(result, "网络判定应可用");
+                    Assert(!item.Session.Verified, "不应标记为已登录");
+                    Assert(item.Session.UserIndex.Length == 0, "不应有 userIndex");
+                    Assert(item.StateText.Contains("免认证"), "状态应显示免认证，实际：" + item.StateText);
+                    Assert(item.Session.LastMessage.Contains("没有校验账号密码"), "应提示未校验账号密码");
+                });
+            }
+        }
+
+        private static void TestVerifiedLogin(LogService log)
+        {
+            using (var portal = new MockPortal(req =>
+            {
+                if (req.Path == "/") return MockResponse.Redirect(Absolute(req, "/eportal/index.jsp?c=ACSW&mac=AABBCCDDEEFF"));
+                if (req.Path.StartsWith("/eportal/index.jsp", StringComparison.Ordinal))
+                    return MockResponse.Text("<input name=\"passwordEncrypt\" value=\"false\" />");
+                if (req.Path == "/eportal/InterFace.do")
+                    return MockResponse.Json("{\"userIndex\":\"UI-777\",\"result\":\"success\",\"keepaliveInterval\":120}");
+                return new MockResponse { Status = 404 };
+            }))
+            {
+                var settings = new AppSettings { ProbeUrls = "http://127.0.0.1:" + portal.Port + "/" };
+                var profile = new AccountProfile
+                {
+                    UserId = "2023123456",
+                    Password = "pwd",
+                    PortalHost = "127.0.0.1:" + portal.Port
+                };
+                var item = new AccountItemViewModel(profile, log, () => settings);
+                var result = item.LoginAsync(false).GetAwaiter().GetResult();
+
+                Check("门户要求认证时走真实登录并标记 Verified", () =>
+                {
+                    Assert(result, "登录应成功");
+                    Assert(item.Session.Verified, "应标记为已登录");
+                    Equal("UI-777", item.Session.UserIndex, "userIndex");
+                    Equal("在线", item.StateText, "状态文案");
+                });
+            }
+        }
+
+        private static void TestAdapters()
+        {
+            Check("网卡枚举返回合法 MAC", () =>
+            {
+                var adapters = NetworkAdapterService.GetAdapters();
+                foreach (var adapter in adapters)
+                {
+                    Assert(adapter.Mac.Length == 12, "MAC 长度异常：" + adapter.Mac);
+                }
+            });
+            Check("网卡查找找不到时返回 null", () =>
+            {
+                Assert(NetworkAdapterService.Find("不存在的网卡") == null, "应返回 null");
+            });
         }
 
         private static string Absolute(MockRequest request, string path)

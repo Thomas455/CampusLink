@@ -9,12 +9,12 @@
 | 模块 | 内容 |
 | --- | --- |
 | 核心认证 | 探测受 AC 拦截的 302 → 自动提取 `queryString` → 登录 → 按 `keepaliveInterval` 保活 → 下线 → 在线信息查询 |
-| MAC 无感 | 登录后调用 `registerMac` 注册无感认证；`cancelMacWithUserNameAndMac` 解绑 |
-| 多账号 | 账号列表 / 切换 / 一键全部登录 / 强制下线（`logoutByUserIdAndPass`）；每个账号可独立配置门户地址与源 IP |
+| MAC 无感 | 登录后调用 `registerMac` 注册无感认证；`cancelMacWithUserNameAndMac` 解绑；MAC 来自账号绑定的**网卡**，不需要手填 |
+| 多账号 | 账号列表 / 切换 / 一键全部登录 / 强制下线（`logoutByUserIdAndPass`）；每个账号绑定一块网卡（决定认证 MAC 与源 IP）和独立门户地址 |
 | 自动化 | 启动自动登录、掉线探测自动重连、登录后自动注册 MAC 无感 |
-| 自助服务 | 抓 RSA 公钥 + 验证码图片、登录校验、默认密码检测（验证码人工识别） |
+| 自助服务 | 只能选「账号」页里已保存的账号；抓 RSA 公钥 + 验证码图片、登录校验、默认密码检测（验证码人工识别） |
 | 协议诊断 | 逐接口调用并把原始响应打印出来（排错 `queryString` / 密码加密模式 / 服务列表） |
-| 系统集成 | 托盘图标与菜单、开机自启、关闭/最小化到托盘、按天滚动日志 |
+| 系统集成 | 单实例运行、托盘图标与菜单、开机自启、按天滚动日志；关闭窗口默认退出（可改为最小化到托盘） |
 | 安全 | 密码用 Windows DPAPI（当前用户）加密存盘；日志自动脱敏 `password/pass/pwd/verifycode` |
 
 ## 环境与构建
@@ -33,22 +33,34 @@ msbuild CampusLink.csproj -t:Restore,Build -p:Configuration=Release
 ## 快速上手
 
 1. 电脑连上校园网，**先不要用浏览器登录**。
-2. 「账号」页 → **新建账号**：填学号、密码，门户地址默认 `222.201.54.55`。
-3. 点卡片上的 **登录**。成功后可再点 **无感注册**，让本机 MAC 之后长期直通。
-4. 需要常驻：在「设置」里打开 **开机自动启动**、**关闭窗口时最小化到托盘**、**掉线自动重连**。
+2. 「账号」页 → 左上角 **添加账号**：填学号、密码，在「认证网卡」里选中你正在联网的那块网卡，门户地址默认 `222.201.54.55`。
+3. 保存后点卡片上的 **登录**。成功后可再点 **无感注册**，让该网卡的 MAC 之后长期直通。
+4. 要改账号：点卡片上的 **编辑**；要删账号：进编辑面板后点 **删除账号**（会二次确认）。
+5. 需要常驻：在「设置」里打开 **开机自动启动**、**关闭窗口时最小化到托盘**、**掉线自动重连**。
 
-> 如果门户已经显示「已在线（AC 返回成功页）」，说明这个 MAC 已经在免认证状态，不需要再登录。
+> 如果门户已经显示「已在线（AC 返回成功页）」，说明这个 MAC 已经在免认证状态，**此时程序不会校验账号密码**，卡片会显示 `在线·免认证`。
 
 ## 界面
 
 | 页面 | 作用 |
 | --- | --- |
-| 账号 | 账号卡片、登录/下线/探测/无感注册/解绑/在线信息、账号编辑面板 |
-| 自助服务 | 取验证码 → RSA 登录校验 / 默认密码检测，一键打开自助服务网站 |
+| 账号 | 账号卡片（登录/下线/探测/编辑/无感注册/解绑/在线信息）；默认只显示卡片列表，点「添加账号」或「编辑」才弹出表单 |
+| 自助服务 | 从已保存账号里选一个 → 取验证码 → RSA 登录校验 / 默认密码检测，一键打开自助服务网站 |
 | 协议诊断 | 探测 queryString、pageInfo、登录页字段与 RSA 公钥、getServices、getOnlineUserInfo，原始响应可复制 |
 | 运行日志 | 实时日志列表、清空、打开日志目录 |
 | 设置 | 探测地址、密码加密模式、RSA 分隔符、自动重连间隔、开机自启、托盘行为、自助服务地址 |
 | 关于 | 版本信息、作者社交媒体、赞助码、说明与免责 |
+
+### 登录状态语义（重要）
+
+| 卡片状态 | 含义 |
+| --- | --- |
+| `在线` | 真的走通了 `login` 接口，拿到 `userIndex`，账号密码已通过门户校验 |
+| `在线·免认证` | 门户返回 `redirectortosuccess.jsp`，说明这块 MAC 已被 AC 放行；**本次没有校验账号密码** |
+| `待认证` | 拿到了 `queryString`，还没登录 |
+| `离线` / `异常` | 已下线 / 探测失败或接口报错 |
+
+想验证某个账号的密码对不对，请用「自助服务 → 登录校验」（需要输验证码）；在该 MAC 已注册无感的前提下，直接点「登录」是不会触发密码校验的。
 
 ![自助服务页](../docs/screenshots/selfservice.png)
 
@@ -104,9 +116,13 @@ msbuild CampusLink.csproj -t:Restore,Build -p:Configuration=Release
 | `用户名或密码错误` | 凭据错，或密码加密模式不对。先用「自动」，不行再试强制明文 / 强制 RSA，并核对分隔符 |
 | 提示需要验证码 | 弹窗会显示验证码图片，照图输入；失败会刷新图片重试 |
 | 登录成功但很快掉线 | 密码复杂度不足（`PWD_COMPLEX_OFFLINE_WEB`），去自助服务改密 |
-| 注册了 MAC 还弹认证 | MAC 格式不对或绑定被顶掉：先「解绑 MAC」再重新注册 |
+| 注册了 MAC 还弹认证 | 先「解绑 MAC」再重新注册；确认账号绑定的网卡就是实际联网的那块 |
 | 探不到 queryString | 可能已经在线，或当前不在校园网。门户根返回 `redirectortosuccess.jsp` 就代表在线 |
+| 乱输密码也显示「在线」 | 这是 `在线·免认证`：该 MAC 已被 AC 放行，门户根本没校验密码。要用「自助服务 → 登录校验」验证账号 |
+| 看不到托盘图标 | Windows 11 默认把新图标收进任务栏「^ 隐藏的图标」。设置 → 个性化 → 任务栏 → 其他系统托盘图标 → 打开 CampusLink；程序内「设置」页也有直达按钮 |
 | 设置了开机自启但没生效 | 检查 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 是否有 `CampusLink` 值 |
+| 双击 exe 没反应 | 程序是单实例的：已有实例在跑时会直接把它的窗口唤到前台 |
+| 关闭窗口程序就没了 | 默认关闭即退出；要常驻请在「设置」里勾选「关闭窗口时最小化到托盘」 |
 
 ## 目录结构
 
@@ -114,14 +130,15 @@ msbuild CampusLink.csproj -t:Restore,Build -p:Configuration=Release
 CampusLink/
 ├─ CampusLink.csproj / CampusLink.slnx
 ├─ App.xaml(.cs) / MainWindow.xaml(.cs)
-├─ Models/          账号、设置、会话状态、接口结果
+├─ Models/          账号（含网卡绑定）、设置、会话状态、接口结果
 ├─ Services/        HttpTransport、PortalClient、RuijieRsa、SelfServiceClient、
 │                   AccountStore、KeepaliveService、AutoReconnectService、
-│                   StartupService、TrayService
+│                   StartupService、TrayService、NetworkAdapterService、ShellHelper
 ├─ ViewModels/      Main / AccountItem / Settings / SelfService / Diagnostics / About
 ├─ Views/           AccountsPage / SelfServicePage / DiagnosticsPage / LogsPage /
 │                   SettingsPage / AboutPage / CaptchaDialog
-├─ Infrastructure/  ObservableObject、RelayCommand、LogService、JsonHelper、UiDispatcher
+├─ Infrastructure/  ObservableObject、RelayCommand、LogService、JsonHelper、UiDispatcher、
+│                   SingleInstance、ValueConverters
 └─ Resources/       app-icon.svg（矢量源）、app.ico（多尺寸）、app-icon-256.png、sponsor.jpg
 ```
 

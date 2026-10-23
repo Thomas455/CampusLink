@@ -5,10 +5,11 @@
 ```
 CampusLink/
 ├─ CampusLink/        应用源码（WPF, .NET Framework 4.8）+ 使用文档
-│  └─ README.md       ← 功能、构建、分发、协议说明、常见问题
-├─ tests/CoreTests/   协议层与更新逻辑自动化测试（自带 mock 服务）
-├─ tools/             开发辅助脚本（图标生成、打包：package.ps1）
-├─ installer/         Inno Setup 安装脚本（CampusLink.iss）
+│  └─ README.md       ← 功能、构建、分发、协议、预设、排错
+├─ tests/CoreTests/   协议层与更新/预设/脱敏自动化测试（自带 mock 服务）
+├─ tools/             图标生成、一键打包（package.ps1）
+├─ installer/         Inno Setup 安装脚本
+├─ .github/workflows/ GitHub Actions：打 tag 自动构建并发布 Release
 ├─ docs/              截图与交付说明
 │  ├─ screenshots/    界面截图
 │  └─ 交付说明.md      验证记录、已知限制、后续计划
@@ -28,6 +29,15 @@ msbuild CampusLink.csproj -t:Restore,Build -p:Configuration=Release
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\package.ps1
 # 产物：dist\CampusLink-Setup-<版本>.exe 和 dist\CampusLink-<版本>-win.zip
+```
+
+## 发布
+
+推一个 `v*` tag 即可触发 GitHub Actions（构建 → 打包 zip + Setup → 创建 Release）：
+
+```bash
+git tag v1.3.0
+git push origin v1.3.0
 ```
 
 ## 运行测试

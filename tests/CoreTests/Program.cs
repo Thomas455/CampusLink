@@ -163,8 +163,10 @@ namespace CoreTests
             TestOtherEndpoints(log);
             TestProbeFailure(log);
 
-            Console.WriteLine("== 自助服务（mock） ==");
-            TestSelfService(log);
+            Console.WriteLine("== 账号信息 / 学校预设 / 日志脱敏 ==");
+            TestAccountInfo(log);
+            TestPresets(log);
+            TestLogMasking();
 
             Console.WriteLine("== 账号持久化 / 会话语义 ==");
             TestPersistence(log);
@@ -269,7 +271,7 @@ namespace CoreTests
                     Password = "随便乱输的密码",
                     PortalHost = "127.0.0.1:" + portal.Port
                 };
-                var item = new AccountItemViewModel(profile, log, () => settings);
+                var item = new AccountItemViewModel(profile, log, () => settings, new ToastService());
                 var result = item.LoginAsync(false).GetAwaiter().GetResult();
 
                 Check("探测到已在线时不算登录成功（不校验账号密码）", () =>
@@ -306,14 +308,15 @@ namespace CoreTests
                     Password = "x",
                     PortalHost = "127.0.0.1:" + portal.Port
                 };
-                var item = new AccountItemViewModel(profile, log, () => settings);
+                var item = new AccountItemViewModel(profile, log, () => settings, new ToastService());
                 item.LoginAsync(false).GetAwaiter().GetResult();
 
                 Check("在线账号不是本账号时给出警告", () =>
                 {
                     Equal("2023000000", item.Session.OnlineUserId, "在线账号");
                     Assert(item.Session.OnlineAccountMatches == false, "应判定为不一致");
-                    Assert(item.Session.LastMessage.Contains("不是本账号"), item.Session.LastMessage);
+                    Assert(item.Session.LastMessage.Contains("当前在线的是账号"), item.Session.LastMessage);
+                    Assert(item.Session.LastMessage.Contains("***000"), "日志/提示里应只出现后 3 位：" + item.Session.LastMessage);
                 });
             }
         }
@@ -337,7 +340,7 @@ namespace CoreTests
                     Password = "pwd",
                     PortalHost = "127.0.0.1:" + portal.Port
                 };
-                var item = new AccountItemViewModel(profile, log, () => settings);
+                var item = new AccountItemViewModel(profile, log, () => settings, new ToastService());
                 var result = item.LoginAsync(false).GetAwaiter().GetResult();
 
                 Check("门户要求认证时走真实登录并标记 Verified", () =>
@@ -962,61 +965,158 @@ namespace CoreTests
             });
         }
 
-        private static void TestSelfService(LogService log)
+        private static void TestAccountInfo(LogService log)
         {
-            var captchaPng = new byte[] { 0x89, 0x50, 0x4E, 0x47, 1, 2, 3, 4 };
-            var mode = "success";
+            var sessionId = "4c2f5624ac0597f382192e487ba92bef";
+            var userIndex = HexOf(sessionId + "_10.1.2.3_2023123456");
+            const string ballsJson = "[{\"displayName\":\"套餐&余额\",\"type\":\"money\",\"value\":\"12.50\"},{\"displayName\":\"到期时间\",\"type\":\"periodtime\",\"value\":\"1819899800\"},{\"displayName\":\"在线设备\",\"type\":\"deviceNum\",\"value\":\"2\"}]";
+            var infoJson = "{\"result\":\"success\",\"userId\":\"2023123456\",\"userName\":\"测试用户\",\"userIp\":\"10.1.2.3\",\"userMac\":\"aabbccddeeff\"," +
+                           "\"userGroup\":\"4-26\",\"loginType\":\"3\",\"service\":\"\",\"portalIp\":\"222.201.54.55\"," +
+                           "\"announcement\":\"<a href='x'>公告内容</a>\",\"welcomeTip\":\"晚上好\",\"ballInfo\":" +
+                           JsonConvert.SerializeObject(ballsJson) + "}";
 
             using (var portal = new MockPortal(req =>
             {
-                if (req.Path.EndsWith("login_self.jsf", StringComparison.Ordinal))
-                {
-                    return MockResponse.Text(
-                        "<html><input type=\"hidden\" id=\"publicKey\" value=\"10001&amp;94dd2a8675fb779e6b9f7103698634cd400f27a154afa67af6166a43fc26417\" /></html>");
-                }
-                if (req.Path.EndsWith("verifycode.jsp", StringComparison.Ordinal))
-                {
-                    return new MockResponse { Body = captchaPng, Headers = { ["Content-Type"] = "image/png" } };
-                }
-                if (req.Path.EndsWith("login_judge.jsf", StringComparison.Ordinal))
-                {
-                    if (mode == "success") return MockResponse.Text("self.location='module/webcontent/web/index_self.jsf';");
-                    if (mode == "captcha") return MockResponse.Text("self.location='login_self.jsf?verifyError=true&name=x';");
-                    return MockResponse.Text("self.location='login_self.jsf?errorMsg=%D3%C3%BB%A7%B2%BB%B4%E6%D4%DA%BB%F2%C3%DC%C2%EB%B4%ED%CE%F3';");
-                }
+                if (req.Path == "/") return MockResponse.Redirect(Absolute(req, "/eportal/redirectortosuccess.jsp"));
+                if (req.Path == "/eportal/redirectortosuccess.jsp")
+                    return MockResponse.Redirect(Absolute(req, "/eportal/success.jsp?userIndex=" + userIndex));
+                if (req.Path == "/eportal/InterFace.do" && req.Query.Contains("method=getOnlineUserInfo"))
+                    return MockResponse.Json(infoJson);
                 return new MockResponse { Status = 404 };
             }))
             {
-                var client = new SelfServiceClient("http://127.0.0.1:" + portal.Port + "/selfservice", log);
-                var challenge = client.BeginLoginAsync("test").GetAwaiter().GetResult();
-                Check("自助服务取到公钥和验证码", () =>
+                var baseUrl = "http://127.0.0.1:" + portal.Port;
+                var settings = new AppSettings { ProbeUrls = baseUrl + "/" };
+                var profile = new AccountProfile { UserId = "2023123456", Password = "x", PortalHost = "127.0.0.1:" + portal.Port };
+                var toast = new ToastService();
+                var item = new AccountItemViewModel(profile, log, () => settings, toast);
+
+                var info = item.FetchFullInfoAsync().GetAwaiter().GetResult();
+
+                Check("getOnlineUserInfo 全量字段与套餐解析", () =>
                 {
-                    Assert(challenge.CaptchaImage != null && challenge.CaptchaImage.Length > 0, "验证码为空：" + challenge.Detail);
-                    Assert(challenge.PublicKey.Contains("10001"), "公钥异常：" + challenge.PublicKey);
-                    Assert(challenge.PublicKey.Contains("&"), "公钥应包含分隔符：" + challenge.PublicKey);
+                    Assert(info != null && info.Success, "查询失败：" + (info == null ? "null" : info.Message));
+                    Equal("测试用户", info.UserName, "姓名");
+                    Equal("10.1.2.3", info.UserIp, "IP");
+                    Equal("4-26", info.UserGroup, "用户组");
+                    Assert(info.Balls.Count == 3, "套餐条目数应为 3，实际 " + info.Balls.Count);
+                    Equal("套餐&余额", info.Balls[0].DisplayName, "套餐名");
+                    Equal("12.50", info.Balls[0].Value, "余额");
+                    Equal("在线设备", info.Balls[2].DisplayName, "在线设备");
                 });
 
-                var ok = client.LoginAsync("20231234", "pwd", challenge.PublicKey, "AB12", "test").GetAwaiter().GetResult();
-                Check("自助服务登录成功判定", () => Assert(ok.Success, "应判定成功：" + ok.Message));
+                var infoVm = new InfoViewModel(log, toast, () => null) { Account = item };
+                infoVm.LoadAsync(true).GetAwaiter().GetResult();
 
-                mode = "captcha";
-                var captcha = client.LoginAsync("20231234", "pwd", challenge.PublicKey, "AB12", "test").GetAwaiter().GetResult();
-                Check("自助服务验证码错误识别", () =>
+                Check("信息页结构化分组", () =>
                 {
-                    Assert(!captcha.Success, "应判失败");
-                    Assert(captcha.CaptchaWrong, "应识别为验证码错误：" + captcha.Message);
-                });
-
-                mode = "password";
-                var wrong = client.LoginAsync("20231234", "pwd", challenge.PublicKey, "AB12", "test").GetAwaiter().GetResult();
-                Check("自助服务密码错误识别", () =>
-                {
-                    Assert(!wrong.Success, "应判失败");
-                    Assert(wrong.PasswordWrong, "应识别为密码错误：" + wrong.Message);
+                    Assert(infoVm.Sections.Count >= 4, "分组数量不足：" + infoVm.Sections.Count);
+                    var ballSection = infoVm.Sections.FirstOrDefault(s => s.Title == "套餐与余额");
+                    Assert(ballSection != null, "缺少套餐分组");
+                    Assert(ballSection.Fields.Count == 3, "套餐分组字段数");
+                    Assert(infoVm.Sections.Any(s => s.Title == "网络"), "缺少网络分组");
+                    Assert(!string.IsNullOrWhiteSpace(infoVm.RawJson), "原始响应为空");
                 });
             }
         }
 
+        private static void TestPresets(LogService log)
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "campuslink-preset-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                var service = new PresetService(log, dir);
+                var all = service.LoadAll();
+
+                Check("内置「广州大学·大学城校区」预设", () =>
+                {
+                    var builtin = all.FirstOrDefault(p => p.Id == PresetService.BuiltInId);
+                    Assert(builtin != null, "缺少内置预设");
+                    Equal("广州大学·大学城校区", builtin.Name, "学校名称");
+                    Equal("222.201.54.55", builtin.PortalHost, "门户地址");
+                    Equal("http://222.201.54.23:8080/selfservice", builtin.SelfServiceUrl, "自助服务地址");
+                    Equal("{uid}@Gzhu", builtin.DefaultPasswordTemplate, "默认密码模板");
+                    Assert(File.Exists(builtin.FilePath), "预设文件没有落盘");
+                });
+
+                var custom = new SchoolPreset
+                {
+                    Name = "测试大学",
+                    Author = "tester",
+                    PortalHost = "10.0.0.1",
+                    SelfServiceUrl = "http://10.0.0.1:8080/selfservice",
+                    DefaultPasswordTemplate = "{uid}"
+                };
+                service.Save(custom);
+
+                Check("保存预设生成独立文件", () =>
+                {
+                    Assert(File.Exists(custom.FilePath), "预设文件不存在");
+                    Assert(service.LoadAll().Any(p => p.Id == custom.Id && p.Name == "测试大学"), "重新加载找不到预设");
+                });
+
+                var exportPath = Path.Combine(Path.GetTempPath(), "campuslink-preset-export-" + Guid.NewGuid().ToString("N") + ".json");
+                service.Export(custom, exportPath);
+                var imported = service.Import(exportPath);
+
+                Check("导出/导入预设（自动分配新 Id）", () =>
+                {
+                    Assert(imported.Id != custom.Id, "导入应生成新 Id");
+                    Equal("测试大学", imported.Name, "学校名称");
+                    Equal("10.0.0.1", imported.PortalHost, "门户地址");
+                    Assert(service.LoadAll().Any(p => p.Id == imported.Id), "导入后应能加载");
+                });
+
+                service.Delete(custom);
+                Check("删除预设", () => Assert(!File.Exists(custom.FilePath), "预设文件仍存在"));
+                try { File.Delete(exportPath); } catch { }
+            }
+            finally
+            {
+                try { Directory.Delete(dir, true); } catch { }
+            }
+        }
+
+        private static void TestLogMasking()
+        {
+            Check("日志脱敏：无显示名时只保留学号后 3 位", () =>
+            {
+                var profile = new AccountProfile { UserId = "20230000108" };
+                Equal("***108", AccountProfile.MaskUserId("20230000108"), "掩码");
+                Equal("账号***108", profile.LogName, "日志名");
+            });
+
+            Check("日志脱敏：有显示名时用显示名", () =>
+            {
+                var profile = new AccountProfile { UserId = "20230000108", DisplayName = "宿舍主号" };
+                Equal("宿舍主号", profile.LogName, "日志名");
+            });
+
+            Check("历史日志清洗：旧日志里的完整学号被替换", () =>
+            {
+                var dir = Path.Combine(Path.GetTempPath(), "campuslink-log-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(dir);
+                var file = Path.Combine(dir, "20260101.log");
+                File.WriteAllText(file, "2026-01-01 10:00:00.000 [INF] {20230000108} 探测：已在线" + Environment.NewLine +
+                                        "2026-01-01 10:00:01.000 [DBG] POST | userId=20230000108&userIndex=4c2f5624ac0597f382192e487ba92bee", Encoding.UTF8);
+                var log2 = new LogService(true, dir);
+                log2.SanitizeHistory(new[] { "20230000108" });
+                var cleaned = File.ReadAllText(file);
+                Assert(!cleaned.Contains("20230000108"), "仍含完整学号：" + cleaned);
+                Assert(cleaned.Contains("{***108}"), "tag 未脱敏：" + cleaned);
+                Assert(!cleaned.Contains("ac0597f3"), "userIndex 未截断：" + cleaned);
+                try { Directory.Delete(dir, true); } catch { }
+            });
+
+            Check("日志脱敏：请求体里的 userId 只剩后 3 位", () =>
+            {
+                var text = LogService.Redact("POST http://x/eInterface.do | userId=2023123456&password=secret&userIndex=4c2f5624ac0597f382192e487ba92bee");
+                Assert(!text.Contains("2023123456"), "仍含完整学号：" + text);
+                Assert(text.Contains("***456"), "未保留后 3 位：" + text);
+                Assert(!text.Contains("secret"), "密码未脱敏：" + text);
+                Assert(!text.Contains("ac0597f3"), "userIndex 未截断：" + text);
+            });
+        }
         private static string Reverse(string text)
         {
             var chars = text.ToCharArray();

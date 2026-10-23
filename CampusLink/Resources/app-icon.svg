@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="CampusLink 校园网认证助手">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2B6CF6"/>
+      <stop offset="0.55" stop-color="#2F8BF3"/>
+      <stop offset="1" stop-color="#22B8CF"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.20"/>
+      <stop offset="0.45" stop-color="#FFFFFF" stop-opacity="0.02"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#0B2A6B" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bg)"/>
+  <rect x="16" y="16" width="480" height="240" rx="112" fill="url(#gloss)"/>
+
+  <g filter="url(#softShadow)" stroke="#FFFFFF" fill="none" stroke-linecap="round">
+    <path d="M196 306 A84 84 0 0 1 316 306" stroke-width="34" stroke-opacity="1"/>
+    <path d="M156 268 A140 140 0 0 1 356 268" stroke-width="34" stroke-opacity="0.82"/>
+    <path d="M116 230 A196 196 0 0 1 396 230" stroke-width="34" stroke-opacity="0.62"/>
+    <circle cx="256" cy="362" r="32" fill="#FFFFFF" stroke="none"/>
+  </g>
+
+  <g>
+    <circle cx="388" cy="388" r="70" fill="#16C47F" stroke="url(#bg)" stroke-width="10"/>
+    <path d="M354 388 l22 22 l42 -46" fill="none" stroke="#FFFFFF" stroke-width="20"
+          stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

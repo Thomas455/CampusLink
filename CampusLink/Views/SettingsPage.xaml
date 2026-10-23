@@ -1,0 +1,108 @@
+<UserControl x:Class="CampusLink.Views.SettingsPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             FontFamily="{StaticResource AppFont}">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel MaxWidth="820" HorizontalAlignment="Left">
+
+            <Border Style="{StaticResource CardStyle}">
+                <StackPanel>
+                    <TextBlock Text="门户与协议" Style="{StaticResource SectionTitleStyle}" />
+
+                    <TextBlock Text="默认门户地址（新建账号时使用）" Style="{StaticResource FieldLabelStyle}" />
+                    <ui:TextBox Text="{Binding DefaultPortalHost, UpdateSourceTrigger=PropertyChanged}" />
+
+                    <TextBlock Text="探测地址（每行一个，按顺序尝试）" Style="{StaticResource FieldLabelStyle}" />
+                    <TextBox Text="{Binding ProbeUrls, UpdateSourceTrigger=PropertyChanged}"
+                             AcceptsReturn="True" Height="86" TextWrapping="NoWrap"
+                             VerticalScrollBarVisibility="Auto" Padding="8"
+                             Background="#141A26" Foreground="{StaticResource StrongTextBrush}"
+                             BorderBrush="{StaticResource CardBorderBrush}"
+                             FontFamily="Consolas" FontSize="12" />
+
+                    <Grid Margin="0,4,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="200" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                            <TextBlock Text="密码加密模式" Style="{StaticResource FieldLabelStyle}" />
+                            <ComboBox ItemsSource="{Binding PasswordEncryptModes}"
+                                      DisplayMemberPath="Label"
+                                      SelectedValuePath="Key"
+                                      SelectedValue="{Binding SelectedPasswordEncryptMode}"
+                                      Height="34" />
+                            <TextBlock Style="{StaticResource MutedTextStyle}" Margin="0,4,0,0"
+                                       Text="资料里 passwordEncrypt 的真实取值未确认，先用「自动」，登录报密码错误再试强制明文/RSA。" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="RSA 拼接分隔符" Style="{StaticResource FieldLabelStyle}" />
+                            <ui:TextBox Text="{Binding RsaSeparator, UpdateSourceTrigger=PropertyChanged}" />
+                            <TextBlock Style="{StaticResource MutedTextStyle}" Margin="0,4,0,0"
+                                       Text="资料里出现过 &gt; 和 &gt;&gt; 两种，默认 &gt;。" />
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource CardStyle}" Margin="0,16,0,0">
+                <StackPanel>
+                    <TextBlock Text="自动化" Style="{StaticResource SectionTitleStyle}" />
+                    <CheckBox Content="启动时自动登录（按账号里的设置）" IsChecked="{Binding AutoLoginOnStartup}"
+                              Foreground="{StaticResource StrongTextBrush}" Margin="0,4,0,8" />
+                    <CheckBox Content="启用掉线自动重连" IsChecked="{Binding AutoReconnectEnabled}"
+                              Foreground="{StaticResource StrongTextBrush}" Margin="0,0,0,8" />
+                    <CheckBox Content="启用会话保活（按 keepaliveInterval）" IsChecked="{Binding KeepaliveEnabled}"
+                              Foreground="{StaticResource StrongTextBrush}" Margin="0,0,0,8" />
+
+                    <TextBlock Text="自动重连检查间隔（秒）" Style="{StaticResource FieldLabelStyle}" />
+                    <ui:TextBox Width="140" HorizontalAlignment="Left"
+                                Text="{Binding ReconnectCheckSeconds, UpdateSourceTrigger=PropertyChanged}" />
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource CardStyle}" Margin="0,16,0,0">
+                <StackPanel>
+                    <TextBlock Text="窗口与启动" Style="{StaticResource SectionTitleStyle}" />
+                    <CheckBox Content="开机自动启动" IsChecked="{Binding StartWithWindows}"
+                              Foreground="{StaticResource StrongTextBrush}" Margin="0,4,0,8" />
+                    <CheckBox Content="关闭窗口时最小化到托盘" IsChecked="{Binding CloseToTray}"
+                              Foreground="{StaticResource StrongTextBrush}" Margin="0,0,0,8" />
+                    <CheckBox Content="最小化时隐藏到托盘" IsChecked="{Binding MinimizeToTray}"
+                              Foreground="{StaticResource StrongTextBrush}" Margin="0,0,0,8" />
+                    <CheckBox Content="显示托盘气泡通知" IsChecked="{Binding ShowBalloonNotifications}"
+                              Foreground="{StaticResource StrongTextBrush}" />
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource CardStyle}" Margin="0,16,0,0">
+                <StackPanel>
+                    <TextBlock Text="自助服务" Style="{StaticResource SectionTitleStyle}" />
+                    <TextBlock Text="自助服务地址" Style="{StaticResource FieldLabelStyle}" />
+                    <ui:TextBox Text="{Binding SelfServiceBaseUrl, UpdateSourceTrigger=PropertyChanged}"
+                                PlaceholderText="http://222.201.54.23:8080/selfservice" />
+                    <TextBlock Text="默认密码模板（{uid} 会替换成学号）" Style="{StaticResource FieldLabelStyle}" />
+                    <ui:TextBox Text="{Binding DefaultPasswordTemplate, UpdateSourceTrigger=PropertyChanged}"
+                                PlaceholderText="{}{uid}@Gzhu" />
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource CardStyle}" Margin="0,16,0,0">
+                <StackPanel>
+                    <TextBlock Text="数据位置" Style="{StaticResource SectionTitleStyle}" />
+                    <TextBlock Text="{Binding DataDirectory}" Style="{StaticResource MutedTextStyle}"
+                               FontFamily="Consolas" />
+                    <TextBlock Style="{StaticResource MutedTextStyle}" Margin="0,6,0,0"
+                               Text="账号密码用 Windows DPAPI（当前用户）加密保存，换机器或换用户无法解密。" />
+                </StackPanel>
+            </Border>
+
+            <StackPanel Orientation="Horizontal" Margin="0,18,0,0" VerticalAlignment="Center">
+                <ui:Button Content="保存设置" Appearance="Primary" Command="{Binding SaveCommand}" />
+                <TextBlock Text="{Binding SaveHint}" Style="{StaticResource MutedTextStyle}"
+                           VerticalAlignment="Center" Margin="12,0,0,0" />
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

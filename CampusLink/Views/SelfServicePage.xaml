@@ -1,0 +1,88 @@
+<UserControl x:Class="CampusLink.Views.SelfServicePage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             FontFamily="{StaticResource AppFont}">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel MaxWidth="760" HorizontalAlignment="Left">
+            <Border Style="{StaticResource CardStyle}">
+                <StackPanel>
+                    <TextBlock Text="SAM+ 自助服务（改密 / 查余额 / 默认密码检测）" Style="{StaticResource SectionTitleStyle}" />
+                    <TextBlock Style="{StaticResource MutedTextStyle}"
+                               Text="自助服务强制 RSA 加密并且每次登录都要验证码，所以这里把验证码图片直接显示出来，人工输入即可。默认密码检测原理：用「学号@Gzhu」尝试真实登录一次，能登进去说明默认密码没改。" />
+
+                    <Grid Margin="0,12,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Margin="0,0,10,0">
+                            <TextBlock Text="学号" Style="{StaticResource FieldLabelStyle}" />
+                            <ui:TextBox Text="{Binding UserId, UpdateSourceTrigger=PropertyChanged}" />
+                            <TextBlock Text="密码" Style="{StaticResource FieldLabelStyle}" />
+                            <PasswordBox x:Name="SelfServicePasswordBox" Style="{StaticResource AppPasswordBoxStyle}"
+                                         PasswordChanged="SelfServicePasswordBox_OnPasswordChanged" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="候选默认密码（留空则用设置里的模板）" Style="{StaticResource FieldLabelStyle}" />
+                            <ui:TextBox Text="{Binding CandidatePassword, UpdateSourceTrigger=PropertyChanged}" />
+                            <TextBlock Text="自动生成的候选密码" Style="{StaticResource FieldLabelStyle}" />
+                            <TextBlock Text="{Binding CandidatePreview}" Style="{StaticResource MutedTextStyle}"
+                                       VerticalAlignment="Center" Margin="0,6,0,0" />
+                        </StackPanel>
+                    </Grid>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                        <ui:Button Content="获取验证码" Appearance="Primary" Command="{Binding FetchCaptchaCommand}" Margin="0,0,8,0" />
+                        <ui:Button Content="登录校验" Appearance="Secondary" Command="{Binding LoginCommand}" Margin="0,0,8,0" />
+                        <ui:Button Content="检测默认密码" Appearance="Caution" Command="{Binding CheckDefaultPasswordCommand}" Margin="0,0,8,0" />
+                        <ui:Button Content="打开自助服务" Appearance="Transparent" Command="{Binding OpenSiteCommand}" />
+                    </StackPanel>
+
+                    <Grid Margin="0,16,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="180" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Border Grid.Column="0" Height="70" CornerRadius="6" Background="#10151F"
+                                BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="1">
+                            <Image Source="{Binding CaptchaImage}" Stretch="None" HorizontalAlignment="Center"
+                                   VerticalAlignment="Center" />
+                        </Border>
+                        <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
+                            <TextBlock Text="验证码（4 位，照图输入）" Style="{StaticResource FieldLabelStyle}" Margin="0,0,0,4" />
+                            <StackPanel Orientation="Horizontal">
+                                <ui:TextBox Width="160" MaxLength="8" Text="{Binding Captcha, UpdateSourceTrigger=PropertyChanged}" />
+                                <ui:Button Content="清空" Appearance="Transparent" Margin="8,0,0,0"
+                                           Command="{Binding ClearCaptchaCommand}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Grid>
+
+                    <ui:ProgressRing IsIndeterminate="True" Width="18" Height="18" HorizontalAlignment="Left"
+                                     Margin="0,10,0,0" Visibility="{Binding Busy, Converter={StaticResource BoolToVisibilityConverter}}" />
+
+                    <TextBlock Text="{Binding Status}" Style="{StaticResource MutedTextStyle}" Margin="0,12,0,0" />
+
+                    <Border Background="#10151F" CornerRadius="6" Padding="12" Margin="0,10,0,0"
+                            Visibility="{Binding HasResult, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <TextBlock Text="{Binding Result}" TextWrapping="Wrap" FontSize="12"
+                                   Foreground="{StaticResource StrongTextBrush}" />
+                    </Border>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource CardStyle}" Margin="0,16,0,0">
+                <StackPanel>
+                    <TextBlock Text="说明与边界" Style="{StaticResource SectionTitleStyle}" />
+                    <TextBlock Style="{StaticResource MutedTextStyle}"
+                               Text="· 资料里只逆向到自助服务的登录接口，改密 / 余额等业务页面是登录后的 JSF 动态页，未做接口化，点击「打开自助服务」在浏览器里操作最稳。" />
+                    <TextBlock Style="{StaticResource MutedTextStyle}" Margin="0,4,0,0"
+                               Text="· 验证码是图片，离线没有可靠的 C# OCR 方案（资料里的 ddddocr 是 Python 库），所以这里保留人工识别。" />
+                    <TextBlock Style="{StaticResource MutedTextStyle}" Margin="0,4,0,0"
+                               Text="· 默认密码检测只检测你自己的账号：登录成功即说明密码仍是默认值，请尽快修改。" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

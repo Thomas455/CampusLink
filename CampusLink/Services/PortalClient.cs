@@ -272,8 +272,7 @@ namespace CampusLink.Services
         {
             var result = new LoginResult();
             var password = account.Password ?? "";
-            var macSource = string.IsNullOrWhiteSpace(account.Mac) ? macOverride : account.Mac;
-            var mac = RuijieRsa.NormalizeMac(macSource ?? "");
+            var mac = RuijieRsa.NormalizeMac(macOverride ?? "");
 
             var encrypt = ResolvePasswordEncrypt(page, passwordEncryptMode, out var encryptReason);
 

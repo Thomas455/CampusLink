@@ -25,7 +25,10 @@ namespace CampusLink.ViewModels
         private string _editorPassword = "";
         private string _editorError = "";
         private string _editorHint = "";
-        private bool _isNewAccount;
+        private bool _isEditorOpen;
+        private bool _editorIsNew = true;
+        private string _editorTitle = "添加账号";
+        private NetworkAdapterInfo _selectedAdapter;
         private bool _disposed;
 
         public MainViewModel(LogService log, AccountStore store)
@@ -38,23 +41,27 @@ namespace CampusLink.ViewModels
             _autoReconnect.CheckDue += OnReconnectTick;
             _keepalive.Tick += OnKeepaliveTick;
 
-            Settings = new SettingsViewModel(_settings, log, OnSettingsSaved);
-            SelfService = new SelfServiceViewModel(log, () => _settings);
-            Diagnostics = new DiagnosticsViewModel(log, () => _settings);
-            About = new AboutViewModel(log, _store.DataDirectory, log.LogDirectory);
-
             Accounts = new ObservableCollection<AccountItemViewModel>();
+            Adapters = new ObservableCollection<NetworkAdapterInfo>();
 
-            NewAccountCommand = new RelayCommand(StartNewAccount);
+            Settings = new SettingsViewModel(_settings, log, OnSettingsSaved);
+            SelfService = new SelfServiceViewModel(log, () => _settings, Accounts);
+            Diagnostics = new DiagnosticsViewModel(log, () => _settings);
+            About = new AboutViewModel(log, _store.DataDirectory, _log.LogDirectory);
+
+            AddAccountCommand = new RelayCommand(OpenAddEditor);
+            EditAccountCommand = new RelayCommand<AccountItemViewModel>(OpenEditEditor);
             SaveAccountCommand = new RelayCommand(SaveAccount);
-            CancelEditCommand = new RelayCommand(CancelEdit);
+            CancelEditCommand = new RelayCommand(CloseEditor);
             DeleteAccountCommand = new RelayCommand(DeleteAccount, () => SelectedAccount != null);
             ForceLogoutCommand = new AsyncRelayCommand(ForceLogoutAsync, () => SelectedAccount != null, OnCommandError);
+            RefreshAdaptersCommand = new RelayCommand(ReloadAdapters);
             LoginAllCommand = new AsyncRelayCommand(LoginAllAsync, () => !IsAnyBusy(), OnCommandError);
             ProbeAllCommand = new AsyncRelayCommand(ProbeAllAsync, () => !IsAnyBusy(), OnCommandError);
-            OpenDataFolderCommand = new RelayCommand(() => OpenFolder(_store.DataDirectory));
-            OpenLogFolderCommand = new RelayCommand(() => OpenFolder(_log.LogDirectory));
+            OpenDataFolderCommand = new RelayCommand(() => ShellHelper.OpenFolder(_store.DataDirectory, _log));
+            OpenLogFolderCommand = new RelayCommand(() => ShellHelper.OpenFolder(_log.LogDirectory, _log));
 
+            ReloadAdapters();
             LoadAccounts();
             SelectFirstAccount();
         }
@@ -64,6 +71,8 @@ namespace CampusLink.ViewModels
 
         public ObservableCollection<AccountItemViewModel> Accounts { get; }
 
+        public ObservableCollection<NetworkAdapterInfo> Adapters { get; }
+
         public LogService Log => _log;
 
         public SettingsViewModel Settings { get; }
@@ -71,17 +80,19 @@ namespace CampusLink.ViewModels
         public DiagnosticsViewModel Diagnostics { get; }
         public AboutViewModel About { get; }
 
-        public ICommand NewAccountCommand { get; }
+        public ICommand AddAccountCommand { get; }
+        public ICommand EditAccountCommand { get; }
         public ICommand SaveAccountCommand { get; }
         public ICommand CancelEditCommand { get; }
         public ICommand DeleteAccountCommand { get; }
         public ICommand ForceLogoutCommand { get; }
+        public ICommand RefreshAdaptersCommand { get; }
         public ICommand LoginAllCommand { get; }
         public ICommand ProbeAllCommand { get; }
         public ICommand OpenDataFolderCommand { get; }
         public ICommand OpenLogFolderCommand { get; }
 
-        // ---------------------------------------------------------------- 选中账号 / 编辑器
+        // ---------------------------------------------------------------- 选中账号
 
         public AccountItemViewModel SelectedAccount
         {
@@ -90,7 +101,7 @@ namespace CampusLink.ViewModels
             {
                 if (!SetProperty(ref _selected, value)) return;
                 Diagnostics.Account = value;
-                LoadEditor(value);
+                if (SelfService != null && value != null) SelfService.SelectedAccount = value;
                 OnPropertyChanged(nameof(HasSelection));
                 OnPropertyChanged(nameof(SelectionTitle));
                 UpdateTrayText();
@@ -102,32 +113,56 @@ namespace CampusLink.ViewModels
 
         public string SelectionTitle => _selected == null ? "未选择账号" : _selected.Title;
 
-        public bool IsNewAccount
+        // ---------------------------------------------------------------- 编辑器
+
+        public bool IsEditorOpen
         {
-            get => _isNewAccount;
-            set
+            get => _isEditorOpen;
+            private set
             {
-                if (!SetProperty(ref _isNewAccount, value)) return;
-                OnPropertyChanged(nameof(EditorTitle));
+                if (!SetProperty(ref _isEditorOpen, value)) return;
+                OnPropertyChanged(nameof(IsEditorClosed));
             }
         }
 
-        public string EditorTitle => IsNewAccount ? "新建账号" : (_selected == null ? "账号详情" : "编辑：" + _selected.Title);
+        public bool IsEditorClosed => !_isEditorOpen;
+
+        public string EditorTitle
+        {
+            get => _editorTitle;
+            private set => SetProperty(ref _editorTitle, value);
+        }
 
         public string EditorDisplayName { get; set; } = "";
         public string EditorUserId { get; set; } = "";
-        public string EditorMac { get; set; } = "";
         public string EditorService { get; set; } = "";
         public string EditorPortalHost { get; set; } = "";
-        public string EditorSourceIp { get; set; } = "";
         public string EditorRemark { get; set; } = "";
         public bool EditorAutoLogin { get; set; } = true;
         public bool EditorAutoReconnect { get; set; } = true;
         public bool EditorAutoRegisterMac { get; set; }
 
-        public string EditorPasswordHint => IsNewAccount
-            ? "新账号必填"
-            : "留空表示不修改已有密码";
+        public NetworkAdapterInfo SelectedAdapter
+        {
+            get => _selectedAdapter;
+            set
+            {
+                if (!SetProperty(ref _selectedAdapter, value)) return;
+                OnPropertyChanged(nameof(AdapterHint));
+            }
+        }
+
+        public string AdapterHint
+        {
+            get
+            {
+                if (SelectedAdapter == null) return "未选择网卡：将使用探测到的 MAC，且不绑定源 IP。";
+                return "认证 MAC：" + RuijieRsa.NormalizeMac(SelectedAdapter.Mac)
+                       + (string.IsNullOrWhiteSpace(SelectedAdapter.Ipv4) ? "（该网卡没有 IPv4）" : "，源 IP：" + SelectedAdapter.Ipv4);
+            }
+        }
+
+        public string EditorPasswordHint => _editorIsNew ? "新账号必填" : "留空表示不修改已有密码";
 
         public string EditorError
         {
@@ -146,62 +181,76 @@ namespace CampusLink.ViewModels
             _editorPassword = password ?? "";
         }
 
-        private void LoadEditor(AccountItemViewModel item)
+        private void OpenAddEditor()
         {
-            if (item == null)
-            {
-                EditorDisplayName = "";
-                EditorUserId = "";
-                EditorMac = "";
-                EditorService = "";
-                EditorPortalHost = _settings.DefaultPortalHost;
-                EditorSourceIp = "";
-                EditorRemark = "";
-                EditorAutoLogin = true;
-                EditorAutoReconnect = true;
-                EditorAutoRegisterMac = false;
-                _editorPassword = "";
-            }
-            else
-            {
-                var profile = item.Profile;
-                EditorDisplayName = profile.DisplayName;
-                EditorUserId = profile.UserId;
-                EditorMac = profile.Mac;
-                EditorService = profile.Service;
-                EditorPortalHost = profile.PortalHost;
-                EditorSourceIp = profile.SourceIp;
-                EditorRemark = profile.Remark;
-                EditorAutoLogin = profile.AutoLogin;
-                EditorAutoReconnect = profile.AutoReconnect;
-                EditorAutoRegisterMac = profile.AutoRegisterMac;
-                _editorPassword = "";
-            }
+            _editorIsNew = true;
+            IsEditorOpen = true;
+            EditorTitle = "添加账号";
+            EditorDisplayName = "";
+            EditorUserId = "";
+            EditorService = "";
+            EditorPortalHost = _settings.DefaultPortalHost;
+            EditorRemark = "";
+            EditorAutoLogin = true;
+            EditorAutoReconnect = true;
+            EditorAutoRegisterMac = false;
+            _editorPassword = "";
+            SelectedAdapter = Adapters.FirstOrDefault(a => !string.IsNullOrWhiteSpace(a.Ipv4)) ?? Adapters.FirstOrDefault();
 
             EditorError = "";
             EditorHint = "";
+            PushEditorFields();
+            OnPropertyChanged(nameof(EditorPasswordHint));
+        }
+
+        private void OpenEditEditor(AccountItemViewModel item)
+        {
+            if (item == null) return;
+            SelectedAccount = item;
+            _editorIsNew = false;
+            IsEditorOpen = true;
+            EditorTitle = "编辑：" + item.Title;
+
+            var profile = item.Profile;
+            EditorDisplayName = profile.DisplayName;
+            EditorUserId = profile.UserId;
+            EditorService = profile.Service;
+            EditorPortalHost = profile.PortalHost;
+            EditorRemark = profile.Remark;
+            EditorAutoLogin = profile.AutoLogin;
+            EditorAutoReconnect = profile.AutoReconnect;
+            EditorAutoRegisterMac = profile.AutoRegisterMac;
+            _editorPassword = "";
+            SelectedAdapter = Adapters.FirstOrDefault(a => string.Equals(a.Id, profile.NicId, StringComparison.OrdinalIgnoreCase));
+
+            EditorError = "";
+            EditorHint = "";
+            PushEditorFields();
+            OnPropertyChanged(nameof(EditorPasswordHint));
+        }
+
+        private void PushEditorFields()
+        {
             OnPropertyChanged(nameof(EditorDisplayName));
             OnPropertyChanged(nameof(EditorUserId));
-            OnPropertyChanged(nameof(EditorMac));
             OnPropertyChanged(nameof(EditorService));
             OnPropertyChanged(nameof(EditorPortalHost));
-            OnPropertyChanged(nameof(EditorSourceIp));
             OnPropertyChanged(nameof(EditorRemark));
             OnPropertyChanged(nameof(EditorAutoLogin));
             OnPropertyChanged(nameof(EditorAutoReconnect));
             OnPropertyChanged(nameof(EditorAutoRegisterMac));
-            OnPropertyChanged(nameof(EditorPasswordHint));
+            OnPropertyChanged(nameof(SelectedAdapter));
+            OnPropertyChanged(nameof(AdapterHint));
             OnPropertyChanged(nameof(EditorTitle));
+            OnPropertyChanged(nameof(EditorPasswordHint));
         }
 
-        private void StartNewAccount()
+        private void CloseEditor()
         {
-            IsNewAccount = true;
-            SelectedAccount = null;
-            LoadEditor(null);
-            EditorPortalHost = _settings.DefaultPortalHost;
-            OnPropertyChanged(nameof(EditorPortalHost));
-            OnPropertyChanged(nameof(EditorTitle));
+            _editorPassword = "";
+            EditorError = "";
+            IsEditorOpen = false;
+            OnPropertyChanged(nameof(IsEditorOpen));
         }
 
         private void SaveAccount()
@@ -216,8 +265,9 @@ namespace CampusLink.ViewModels
             var portalHost = string.IsNullOrWhiteSpace(EditorPortalHost)
                 ? _settings.DefaultPortalHost
                 : EditorPortalHost.Trim();
+            var nicId = SelectedAdapter == null ? "" : SelectedAdapter.Id;
 
-            if (IsNewAccount)
+            if (_editorIsNew)
             {
                 if (string.IsNullOrWhiteSpace(_editorPassword))
                 {
@@ -230,10 +280,9 @@ namespace CampusLink.ViewModels
                     DisplayName = (EditorDisplayName ?? "").Trim(),
                     UserId = userId,
                     Password = _editorPassword,
-                    Mac = (EditorMac ?? "").Trim(),
+                    NicId = nicId,
                     Service = (EditorService ?? "").Trim(),
                     PortalHost = portalHost,
-                    SourceIp = (EditorSourceIp ?? "").Trim(),
                     AutoLogin = EditorAutoLogin,
                     AutoReconnect = EditorAutoReconnect,
                     AutoRegisterMac = EditorAutoRegisterMac,
@@ -242,84 +291,81 @@ namespace CampusLink.ViewModels
 
                 var item = CreateItem(profile);
                 Accounts.Add(item);
-                IsNewAccount = false;
                 SelectedAccount = item;
-                PersistAccounts();
-                EditorHint = "已创建账号：" + profile.Title;
                 _log.Info("新增账号：" + profile.UserId);
-                return;
-            }
-
-            if (SelectedAccount == null)
-            {
-                EditorError = "请先选择账号，或点「新建账号」";
-                return;
-            }
-
-            var existing = SelectedAccount;
-            var updated = existing.Profile.Clone();
-            updated.DisplayName = (EditorDisplayName ?? "").Trim();
-            updated.UserId = userId;
-            updated.Mac = (EditorMac ?? "").Trim();
-            updated.Service = (EditorService ?? "").Trim();
-            updated.PortalHost = portalHost;
-            updated.SourceIp = (EditorSourceIp ?? "").Trim();
-            updated.AutoLogin = EditorAutoLogin;
-            updated.AutoReconnect = EditorAutoReconnect;
-            updated.AutoRegisterMac = EditorAutoRegisterMac;
-            updated.Remark = (EditorRemark ?? "").Trim();
-            if (!string.IsNullOrWhiteSpace(_editorPassword)) updated.Password = _editorPassword;
-
-            var endpointChanged = existing.Profile.PortalHost != updated.PortalHost
-                                  || existing.Profile.SourceIp != updated.SourceIp;
-
-            if (endpointChanged)
-            {
-                _keepalive.Stop(existing.Profile.Id);
-                existing.MarkOffline("配置已修改，需要重新登录");
-            }
-
-            existing.ReplaceProfile(updated);
-            _editorPassword = "";
-            PersistAccounts();
-            EditorHint = "已保存";
-            _log.Info("更新账号：" + updated.UserId);
-            OnPropertyChanged(nameof(SelectionTitle));
-            UpdateTrayText();
-        }
-
-        private void CancelEdit()
-        {
-            _editorPassword = "";
-            EditorError = "";
-            EditorHint = "";
-            if (IsNewAccount)
-            {
-                IsNewAccount = false;
-                SelectFirstAccount();
             }
             else
             {
-                LoadEditor(SelectedAccount);
+                var existing = SelectedAccount;
+                if (existing == null)
+                {
+                    EditorError = "请先在左侧选择要编辑的账号";
+                    return;
+                }
+
+                var updated = existing.Profile.Clone();
+                updated.DisplayName = (EditorDisplayName ?? "").Trim();
+                updated.UserId = userId;
+                updated.NicId = nicId;
+                updated.Service = (EditorService ?? "").Trim();
+                updated.PortalHost = portalHost;
+                updated.AutoLogin = EditorAutoLogin;
+                updated.AutoReconnect = EditorAutoReconnect;
+                updated.AutoRegisterMac = EditorAutoRegisterMac;
+                updated.Remark = (EditorRemark ?? "").Trim();
+                if (!string.IsNullOrWhiteSpace(_editorPassword)) updated.Password = _editorPassword;
+
+                var endpointChanged = existing.Profile.NicId != updated.NicId
+                                      || existing.Profile.PortalHost != updated.PortalHost;
+
+                if (endpointChanged)
+                {
+                    _keepalive.Stop(existing.Profile.Id);
+                    existing.MarkOffline("网卡/门户已修改，需要重新登录");
+                }
+
+                existing.ReplaceProfile(updated);
+                _log.Info("更新账号：" + updated.UserId);
             }
+
+            _editorPassword = "";
+            PersistAccounts();
+            EditorHint = "已保存：" + userId;
+            CloseEditor();
+            OnPropertyChanged(nameof(SelectionTitle));
+            OnPropertyChanged(nameof(EditorPasswordHint));
+            UpdateTrayText();
+            CommandManager.InvalidateRequerySuggested();
         }
 
         private void DeleteAccount()
         {
             var item = SelectedAccount;
-            if (item == null) return;
+            if (item == null)
+            {
+                _editorError = "请先选择要删除的账号";
+                OnPropertyChanged(nameof(EditorError));
+                return;
+            }
 
             var answer = MessageBox.Show(
-                "确定要删除账号「" + item.Title + "」吗？\n只会删除本机保存的配置，不会影响校园网服务器。",
+                "确定要删除账号「" + item.Title + "」吗？\n只删除本机保存的配置，不影响校园网服务器上的账号。",
                 "删除账号", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
             if (answer != MessageBoxResult.OK) return;
 
             _keepalive.Stop(item.Profile.Id);
             Accounts.Remove(item);
+
+            if (_isEditorOpen && _editorIsNew == false && SelectedAccount == item)
+            {
+                IsEditorOpen = false;
+            }
+
             SelectedAccount = Accounts.FirstOrDefault();
             PersistAccounts();
             UpdateTrayText();
             _log.Info("删除账号：" + item.Profile.UserId);
+            CommandManager.InvalidateRequerySuggested();
         }
 
         // ---------------------------------------------------------------- 批量操作
@@ -355,7 +401,8 @@ namespace CampusLink.ViewModels
             }
         }
 
-        private async Task LoginAllAsync()        {
+        private async Task LoginAllAsync()
+        {
             var items = Accounts.ToList();
             if (items.Count == 0)
             {
@@ -363,13 +410,18 @@ namespace CampusLink.ViewModels
                 return;
             }
 
-            var success = 0;
+            var verified = 0;
+            var online = 0;
             foreach (var item in items)
             {
-                if (await item.LoginAsync(true).ConfigureAwait(true)) success++;
+                if (await item.LoginAsync(true).ConfigureAwait(true))
+                {
+                    online++;
+                    if (item.Session.Verified) verified++;
+                }
             }
 
-            EditorHint = "批量登录完成：" + success + "/" + items.Count + " 在线";
+            EditorHint = "批量结果：" + online + "/" + items.Count + " 网络可用，其中 " + verified + " 个账号真正通过门户校验";
             _log.Info(EditorHint);
             UpdateTrayText();
         }
@@ -420,7 +472,7 @@ namespace CampusLink.ViewModels
             {
                 if (_disposed) return;
                 if (!item.Profile.AutoReconnect || item.IsBusy) continue;
-                if (item.IsOnline) continue;
+                if (item.IsOnline && item.Session.Verified) continue;
 
                 try
                 {
@@ -461,7 +513,7 @@ namespace CampusLink.ViewModels
         private void ReconcileKeepalive(AccountItemViewModel item)
         {
             if (item == null) return;
-            if (item.IsOnline && _settings.KeepaliveEnabled && !string.IsNullOrWhiteSpace(item.Session.UserIndex))
+            if (item.Session.Verified && _settings.KeepaliveEnabled && !string.IsNullOrWhiteSpace(item.Session.UserIndex))
             {
                 _keepalive.Start(item.Profile.Id,
                     () => item.Client.KeepaliveAsync(item.Session.UserIndex, item.Tag),
@@ -533,7 +585,11 @@ namespace CampusLink.ViewModels
 
             if (profiles.Count == 0)
             {
-                _log.Info("没有已保存的账号，点「新建账号」开始配置。");
+                _log.Info("没有已保存的账号，点「添加账号」开始配置。");
+            }
+            else
+            {
+                _log.Info("已载入 " + profiles.Count + " 个账号");
             }
         }
 
@@ -563,15 +619,20 @@ namespace CampusLink.ViewModels
             return Accounts.Any(a => a.IsBusy);
         }
 
-        private static void OpenFolder(string path)
+        public void ReloadAdapters()
         {
-            try
+            var currentId = SelectedAdapter == null ? null : SelectedAdapter.Id;
+            Adapters.Clear();
+            foreach (var adapter in NetworkAdapterService.GetAdapters())
             {
-                if (Directory.Exists(path)) Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+                Adapters.Add(adapter);
             }
-            catch
+
+            if (currentId != null)
             {
+                SelectedAdapter = Adapters.FirstOrDefault(a => string.Equals(a.Id, currentId, StringComparison.OrdinalIgnoreCase));
             }
+            _log.Debug("网卡列表已刷新，共 " + Adapters.Count + " 块");
         }
 
         public void Dispose()

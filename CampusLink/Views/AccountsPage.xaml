@@ -17,7 +17,7 @@
             </Grid.RowDefinitions>
 
             <StackPanel Orientation="Horizontal" Margin="0,2,0,12">
-                <ui:Button Content="新建账号" Icon="{ui:SymbolIcon Add24}" Command="{Binding NewAccountCommand}" Margin="0,0,8,0" />
+                <ui:Button Content="添加账号" Icon="{ui:SymbolIcon Add24}" Command="{Binding AddAccountCommand}" Margin="0,0,8,0" />
                 <ui:Button Content="一键全部登录" Appearance="Secondary" Command="{Binding LoginAllCommand}" Margin="0,0,8,0" />
                 <ui:Button Content="刷新全部状态" Appearance="Secondary" Command="{Binding ProbeAllCommand}" />
             </StackPanel>
@@ -87,6 +87,10 @@
                                 </Grid>
 
                                 <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                                    <ui:Button Content="编辑" Appearance="Secondary" Height="28" Padding="10,0"
+                                               FontSize="11" Margin="0,0,6,0"
+                                               Command="{Binding DataContext.EditAccountCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                               CommandParameter="{Binding}" />
                                     <ui:Button Content="无感注册" Appearance="Secondary" Height="28" Padding="10,0"
                                                FontSize="11" Command="{Binding RegisterMacCommand}" Margin="0,0,6,0" />
                                     <ui:Button Content="解绑 MAC" Appearance="Secondary" Height="28" Padding="10,0"
@@ -101,7 +105,7 @@
 
                 <TextBlock Margin="4,16,0,0" VerticalAlignment="Top" FontSize="13"
                            Foreground="{StaticResource MutedTextBrush}"
-                           Text="还没有账号。点「新建账号」填写学号、密码和门户地址。">
+                           Text="还没有账号。点「添加账号」填写学号、密码并选择网卡。">
                     <TextBlock.Style>
                         <Style TargetType="TextBlock">
                             <Setter Property="Visibility" Value="Collapsed" />
@@ -116,8 +120,33 @@
             </Grid>
         </Grid>
 
-        <!-- 编辑面板：字段区可滚动，操作按钮固定在底部 -->
-        <Border Grid.Column="1" Style="{StaticResource CardStyle}" VerticalAlignment="Stretch">
+        <!-- 右侧：未打开编辑器时显示提示 -->
+        <Border Grid.Column="1" Style="{StaticResource CardStyle}" VerticalAlignment="Stretch"
+                Visibility="{Binding IsEditorClosed, Converter={StaticResource BoolToVisibilityConverter}}">
+            <StackPanel>
+                <TextBlock Text="账号配置" Style="{StaticResource SectionTitleStyle}" />
+                <TextBlock Style="{StaticResource MutedTextStyle}"
+                           Text="点左上角「添加账号」新建；要修改已有账号，点卡片上的「编辑」。" />
+                <TextBlock Style="{StaticResource MutedTextStyle}" Margin="0,8,0,0"
+                           Text="每个账号绑定一块网卡：认证用的 MAC 和源 IP 都取自该网卡，不需要手填 MAC。" />
+                <TextBlock Style="{StaticResource MutedTextStyle}" Margin="0,8,0,0"
+                           Text="密码用 Windows DPAPI 加密保存在本机，换电脑或换用户无法解密。" />
+
+                <Separator Margin="0,16,0,12" />
+
+                <TextBlock Text="快捷入口" Style="{StaticResource SectionTitleStyle}" />
+                <ui:Button Content="打开数据目录" Appearance="Secondary" HorizontalAlignment="Stretch"
+                           HorizontalContentAlignment="Left" Margin="0,0,0,8"
+                           Command="{Binding OpenDataFolderCommand}" />
+                <ui:Button Content="打开日志目录" Appearance="Secondary" HorizontalAlignment="Stretch"
+                           HorizontalContentAlignment="Left"
+                           Command="{Binding OpenLogFolderCommand}" />
+            </StackPanel>
+        </Border>
+
+        <!-- 右侧：编辑/新增表单 -->
+        <Border Grid.Column="1" Style="{StaticResource CardStyle}" VerticalAlignment="Stretch"
+                Visibility="{Binding IsEditorOpen, Converter={StaticResource BoolToVisibilityConverter}}">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*" />
@@ -141,9 +170,20 @@
                                      PasswordChanged="AccountPasswordBox_OnPasswordChanged" />
                         <TextBlock Text="{Binding EditorPasswordHint}" Style="{StaticResource MutedTextStyle}" Margin="0,4,0,0" />
 
-                        <TextBlock Text="MAC（可选，留空则用探测到的）" Style="{StaticResource FieldLabelStyle}" />
-                        <ui:TextBox Text="{Binding EditorMac, UpdateSourceTrigger=PropertyChanged}"
-                                    PlaceholderText="例如：AABBCCDDEEFF" />
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="认证网卡（决定 MAC 与源 IP）" Style="{StaticResource FieldLabelStyle}" />
+                            <ui:Button Grid.Column="1" Content="刷新" Appearance="Transparent" Height="22" Padding="8,0"
+                                       FontSize="11" Margin="0,6,0,0" Command="{Binding RefreshAdaptersCommand}" />
+                        </Grid>
+                        <ComboBox ItemsSource="{Binding Adapters}"
+                                  SelectedItem="{Binding SelectedAdapter}"
+                                  DisplayMemberPath="DisplayName"
+                                  Height="34" />
+                        <TextBlock Text="{Binding AdapterHint}" Style="{StaticResource MutedTextStyle}" Margin="0,4,0,0" />
 
                         <TextBlock Text="服务名（可选）" Style="{StaticResource FieldLabelStyle}" />
                         <ui:TextBox Text="{Binding EditorService, UpdateSourceTrigger=PropertyChanged}"
@@ -152,10 +192,6 @@
                         <TextBlock Text="门户地址" Style="{StaticResource FieldLabelStyle}" />
                         <ui:TextBox Text="{Binding EditorPortalHost, UpdateSourceTrigger=PropertyChanged}"
                                     PlaceholderText="222.201.54.55" />
-
-                        <TextBlock Text="源 IP（可选，多网卡时指定从哪个 IP 发出）" Style="{StaticResource FieldLabelStyle}" />
-                        <ui:TextBox Text="{Binding EditorSourceIp, UpdateSourceTrigger=PropertyChanged}"
-                                    PlaceholderText="例如：192.168.30.2" />
 
                         <TextBlock Text="备注" Style="{StaticResource FieldLabelStyle}" />
                         <ui:TextBox Text="{Binding EditorRemark, UpdateSourceTrigger=PropertyChanged}" />

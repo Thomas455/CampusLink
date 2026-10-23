@@ -15,6 +15,7 @@ namespace CampusLink.Models
 
     /// <summary>
     /// 单个账号的运行时会话状态（不持久化）。
+    /// Verified 区分「真的用账号登录过」和「网络本来就通（MAC 免认证）」。
     /// </summary>
     public class SessionState
     {
@@ -27,6 +28,9 @@ namespace CampusLink.Models
         public string DetectedMac { get; set; } = "";
 
         public int KeepaliveInterval { get; set; } = 120;
+
+        /// <summary>true = 通过 login 接口拿到 userIndex；false = 只是探测到网络已通。</summary>
+        public bool Verified { get; set; }
 
         public string LastMessage { get; set; } = "";
 
@@ -44,7 +48,7 @@ namespace CampusLink.Models
             {
                 switch (State)
                 {
-                    case LinkState.Online: return "在线";
+                    case LinkState.Online: return Verified ? "在线" : "在线·免认证";
                     case LinkState.Offline: return "离线";
                     case LinkState.Probing: return "探测中";
                     case LinkState.NeedAuth: return "待认证";

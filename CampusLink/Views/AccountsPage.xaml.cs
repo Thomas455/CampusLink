@@ -25,7 +25,8 @@ namespace CampusLink.Views
         private void ViewModel_OnPropertyChanged(object sender, PropertyChangedEventArgs e)
         {
             if (e.PropertyName == nameof(MainViewModel.SelectedAccount) ||
-                e.PropertyName == nameof(MainViewModel.IsNewAccount))
+                e.PropertyName == nameof(MainViewModel.IsEditorOpen) ||
+                e.PropertyName == nameof(MainViewModel.EditorTitle))
             {
                 AccountPasswordBox.Password = "";
             }

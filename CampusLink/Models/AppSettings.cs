@@ -28,9 +28,9 @@ namespace CampusLink.Models
 
         public bool StartWithWindows { get; set; }
 
-        public bool CloseToTray { get; set; } = true;
+        public bool CloseToTray { get; set; }
 
-        public bool MinimizeToTray { get; set; } = true;
+        public bool MinimizeToTray { get; set; }
 
         public bool ShowBalloonNotifications { get; set; } = true;
 

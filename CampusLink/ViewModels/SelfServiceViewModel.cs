@@ -1,6 +1,7 @@
 using System;
-using System.Diagnostics;
+using System.Collections.ObjectModel;
 using System.IO;
+using System.Linq;
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
 using CampusLink.Infrastructure;
@@ -10,8 +11,8 @@ using CampusLink.Services;
 namespace CampusLink.ViewModels
 {
     /// <summary>
-    /// 自助服务页：取公钥 + 验证码 → 登录校验 / 默认密码检测。
-    /// 验证码需要人工识别（离线 C# 没有可靠的 OCR 方案），因此图片直接显示在界面上。
+    /// 自助服务页：只能使用「账号」页里已保存的账号（学号 + 密码），
+    /// 取验证码图片人工输入后做登录校验 / 默认密码检测。
     /// </summary>
     public class SelfServiceViewModel : ObservableObject
     {
@@ -20,24 +21,30 @@ namespace CampusLink.ViewModels
         private SelfServiceClient _client;
         private string _publicKey;
 
-        private string _userId = "";
-        private string _password = "";
+        private AccountItemViewModel _selectedAccount;
         private string _captcha = "";
         private string _candidatePassword = "";
-        private string _status = "先填写学号与密码，然后点「获取验证码」。";
+        private string _status;
         private string _result = "";
         private BitmapSource _captchaImage;
         private bool _busy;
 
-        public SelfServiceViewModel(LogService log, Func<AppSettings> settings)
+        public SelfServiceViewModel(LogService log, Func<AppSettings> settings,
+            ObservableCollection<AccountItemViewModel> accounts)
         {
             _log = log;
             _settings = settings;
+            Accounts = accounts;
+            _status = accounts.Count == 0
+                ? "还没有账号。请先到「账号」页添加账号，再回来做登录校验。"
+                : "选择账号 → 获取验证码 → 输入验证码后提交。";
 
-            FetchCaptchaCommand = new AsyncRelayCommand(FetchCaptchaAsync, () => !Busy, OnError);
-            LoginCommand = new AsyncRelayCommand(() => AttemptAsync(Password, "登录校验"), () => !Busy, OnError);
+            FetchCaptchaCommand = new AsyncRelayCommand(FetchCaptchaAsync,
+                () => _selectedAccount != null && !Busy, OnError);
+            LoginCommand = new AsyncRelayCommand(() => AttemptAsync(AvailablePassword(), "登录校验"),
+                () => CanOperate, OnError);
             CheckDefaultPasswordCommand = new AsyncRelayCommand(
-                () => AttemptAsync(BuildCandidate(), "默认密码检测"), () => !Busy, OnError);
+                () => AttemptAsync(BuildCandidate(), "默认密码检测"), () => CanOperate, OnError);
             OpenSiteCommand = new RelayCommand(OpenSite);
             ClearCaptchaCommand = new RelayCommand(() =>
             {
@@ -49,25 +56,53 @@ namespace CampusLink.ViewModels
             });
         }
 
+        public ObservableCollection<AccountItemViewModel> Accounts { get; }
+
         public ICommand FetchCaptchaCommand { get; }
         public ICommand LoginCommand { get; }
         public ICommand CheckDefaultPasswordCommand { get; }
         public ICommand OpenSiteCommand { get; }
         public ICommand ClearCaptchaCommand { get; }
 
-        public string UserId
+        public AccountItemViewModel SelectedAccount
         {
-            get => _userId;
-            set { _userId = value; OnPropertyChanged(); OnPropertyChanged(nameof(CandidatePreview)); }
+            get => _selectedAccount;
+            set
+            {
+                if (!SetProperty(ref _selectedAccount, value)) return;
+                OnPropertyChanged(nameof(AccountUserId));
+                OnPropertyChanged(nameof(PasswordHint));
+                OnPropertyChanged(nameof(CanOperate));
+                // 换账号后旧的验证码会话就作废了
+                CaptchaImage = null;
+                Captcha = "";
+                _client = null;
+                _publicKey = null;
+                Result = "";
+                Status = value == null
+                    ? "请选择一个账号。"
+                    : "已选择 " + value.Title + "，点「获取验证码」开始。";
+                CommandManager.InvalidateRequerySuggested();
+            }
         }
 
-        public string Password
+        public string AccountUserId => _selectedAccount?.Profile.UserId ?? "";
+
+        public string PasswordHint
         {
-            get => _password;
-            set { _password = value; OnPropertyChanged(); }
+            get
+            {
+                if (_selectedAccount == null) return "使用账号页里保存的密码";
+                return string.IsNullOrWhiteSpace(_selectedAccount.Profile.Password)
+                    ? "⚠ 该账号没有保存密码，请到「账号」页编辑补充"
+                    : "使用账号页里保存的密码";
+            }
         }
 
-        /// <summary>由 PasswordBox 在代码里同步进来。</summary>
+        public bool HasAccounts => Accounts.Count > 0;
+
+        public bool CanOperate => _selectedAccount != null && !Busy && _client != null;
+
         public string CandidatePassword
         {
             get => _candidatePassword;
@@ -75,7 +110,7 @@ namespace CampusLink.ViewModels
         }
 
         public string CandidatePreview =>
-            "候选默认密码：" + (string.IsNullOrWhiteSpace(BuildCandidate()) ? "（待填写学号模板）" : BuildCandidate());
+            "候选默认密码：" + (string.IsNullOrWhiteSpace(BuildCandidate()) ? "（待填写模板或学号）" : BuildCandidate());
 
         public string Captcha
         {
@@ -108,21 +143,34 @@ namespace CampusLink.ViewModels
         public bool Busy
         {
             get => _busy;
-            set { _busy = value; OnPropertyChanged(); }
+            set { _busy = value; OnPropertyChanged(); OnPropertyChanged(nameof(CanOperate)); CommandManager.InvalidateRequerySuggested(); }
         }
 
         public string SelfServiceUrl => SelfServiceClient.NormalizeBase(_settings().SelfServiceBaseUrl) + "/";
+
+        private string AvailablePassword()
+        {
+            var account = _selectedAccount;
+            if (account == null) return "";
+            return account.Profile.Password ?? "";
+        }
 
         private string BuildCandidate()
         {
             if (!string.IsNullOrWhiteSpace(_candidatePassword)) return _candidatePassword;
             var template = _settings().DefaultPasswordTemplate;
             if (string.IsNullOrWhiteSpace(template)) template = "{uid}@Gzhu";
-            return template.Replace("{uid}", _userId ?? "");
+            return template.Replace("{uid}", AccountUserId ?? "");
         }
 
         public async System.Threading.Tasks.Task FetchCaptchaAsync()
         {
+            if (_selectedAccount == null)
+            {
+                Status = "请先选择一个已保存的账号。";
+                return;
+            }
+
             Busy = true;
             try
             {
@@ -157,14 +205,16 @@ namespace CampusLink.ViewModels
                 Status = "请先点「获取验证码」。";
                 return;
             }
-            if (string.IsNullOrWhiteSpace(_userId))
+            if (_selectedAccount == null)
             {
-                Status = "请先填写学号。";
+                Status = "请先选择一个账号。";
                 return;
             }
             if (string.IsNullOrWhiteSpace(password))
             {
-                Status = "请先填写密码。";
+                Status = action == "默认密码检测"
+                    ? "候选密码为空，请填写默认密码模板（例如 {uid}@Gzhu）。"
+                    : "该账号没有保存密码，请到「账号」页编辑补充。";
                 return;
             }
             if (string.IsNullOrWhiteSpace(_captcha))
@@ -173,11 +223,12 @@ namespace CampusLink.ViewModels
                 return;
             }
 
+            var userId = AccountUserId;
             Busy = true;
             try
             {
                 Status = action + "中…";
-                var result = await _client.LoginAsync(_userId, password, _publicKey, _captcha, "自助服务").ConfigureAwait(true);
+                var result = await _client.LoginAsync(userId, password, _publicKey, _captcha, "自助服务").ConfigureAwait(true);
 
                 if (result.Success)
                 {
@@ -185,12 +236,12 @@ namespace CampusLink.ViewModels
                     {
                         Result = "⚠ 该账号仍然可以使用默认密码登录：" + password
                                  + "\n结论：默认密码没改，建议立刻在自助服务里修改。";
-                        _log.Warn("账号 " + _userId + " 疑似仍在使用默认密码");
+                        _log.Warn("账号 " + userId + " 疑似仍在使用默认密码");
                     }
                     else
                     {
                         Result = "✅ 登录成功，账号密码有效。\n如需改密/查余额，点「打开自助服务」在浏览器里操作（自助服务需要验证码，网页端更稳）。";
-                        _log.Info("自助服务登录校验成功：" + _userId);
+                        _log.Info("自助服务登录校验成功：" + userId);
                     }
                     Status = "完成。";
                 }
@@ -204,7 +255,7 @@ namespace CampusLink.ViewModels
                     if (action == "默认密码检测")
                     {
                         Result = "✅ 默认密码登录被拒绝，说明密码已经改过（安全）。\n服务器返回：" + result.Message;
-                        _log.Info("账号 " + _userId + " 默认密码检测通过");
+                        _log.Info("账号 " + userId + " 默认密码检测通过");
                     }
                     else
                     {
@@ -217,28 +268,19 @@ namespace CampusLink.ViewModels
                     Status = "结果不确定：" + result.Message;
                     Result = result.RawText == null ? "" : result.RawText.Substring(0, Math.Min(400, result.RawText.Length));
                 }
-
-                // 验证码是一次性的，本次提交后必须重新获取
-                CaptchaImage = null;
-                Captcha = "";
             }
             finally
             {
                 Busy = false;
                 CaptchaImage = null;
+                Captcha = "";
             }
         }
 
         private void OpenSite()
         {
-            try
-            {
-                Process.Start(new ProcessStartInfo(SelfServiceUrl) { UseShellExecute = true });
-            }
-            catch (Exception ex)
-            {
-                Status = "打开浏览器失败：" + ex.Message;
-            }
+            ShellHelper.OpenUrl(SelfServiceUrl, _log);
+            Status = "已在浏览器打开自助服务。";
         }
 
         private static BitmapSource ToBitmap(byte[] bytes)

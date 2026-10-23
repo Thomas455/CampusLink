@@ -22,17 +22,14 @@ namespace CampusLink.Models
         [JsonIgnore]
         public string Password { get; set; } = "";
 
-        /// <summary>可选：覆盖自动探测到的 MAC（registerMac / RSA 拼接用）。</summary>
-        public string Mac { get; set; } = "";
+        /// <summary>绑定的网卡 Id（MAC 与源 IP 都来自这块网卡，不再让用户手填 MAC）。</summary>
+        public string NicId { get; set; } = "";
 
         /// <summary>可选：服务名（getServices 返回的 serviceName）。</summary>
         public string Service { get; set; } = "";
 
         /// <summary>门户地址，如 222.201.54.55 或 http://222.201.54.55:8080。</summary>
         public string PortalHost { get; set; } = "222.201.54.55";
-
-        /// <summary>可选：从指定本地 IP 发起请求（多网卡 / 虚拟网卡场景）。</summary>
-        public string SourceIp { get; set; } = "";
 
         /// <summary>程序启动且处于未认证状态时自动登录。</summary>
         public bool AutoLogin { get; set; } = true;

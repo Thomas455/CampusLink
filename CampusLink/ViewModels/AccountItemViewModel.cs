@@ -23,11 +23,10 @@ namespace CampusLink.ViewModels
 
     public class AccountItemViewModel : ObservableObject
     {
-        private static readonly Lazy<string> LocalMac = new Lazy<string>(FindLocalMac);
-
         private readonly LogService _log;
         private readonly Func<AppSettings> _settings;
         private readonly SemaphoreSlim _busy = new SemaphoreSlim(1, 1);
+        private NetworkAdapterInfo _adapter;
 
         public AccountItemViewModel(AccountProfile profile, LogService log, Func<AppSettings> settings)
         {
@@ -65,6 +64,8 @@ namespace CampusLink.ViewModels
 
         public string Title => Profile.Title;
 
+        public NetworkAdapterInfo Adapter => _adapter;
+
         public string Subtitle
         {
             get
@@ -72,7 +73,8 @@ namespace CampusLink.ViewModels
                 var parts = new System.Collections.Generic.List<string>();
                 parts.Add(Profile.UserId);
                 parts.Add(Client.Host);
-                if (!string.IsNullOrWhiteSpace(Profile.SourceIp)) parts.Add("源IP " + Profile.SourceIp);
+                if (_adapter != null) parts.Add(_adapter.Name);
+                else parts.Add("未绑定网卡");
                 return string.Join("  ·  ", parts.ToArray());
             }
         }
@@ -85,7 +87,7 @@ namespace CampusLink.ViewModels
             {
                 switch (Session.State)
                 {
-                    case LinkState.Online: return "#22C55E";
+                    case LinkState.Online: return Session.Verified ? "#22C55E" : "#0EA5E9";
                     case LinkState.NeedAuth: return "#F59E0B";
                     case LinkState.Probing:
                     case LinkState.LoggingIn: return "#3B82F6";
@@ -102,9 +104,9 @@ namespace CampusLink.ViewModels
         {
             get
             {
-                var mac = !string.IsNullOrWhiteSpace(Profile.Mac)
-                    ? Profile.Mac
-                    : (!string.IsNullOrWhiteSpace(Session.DetectedMac) ? Session.DetectedMac : LocalMac.Value);
+                var mac = _adapter != null && !string.IsNullOrWhiteSpace(_adapter.Mac)
+                    ? _adapter.Mac
+                    : Session.DetectedMac;
                 return string.IsNullOrWhiteSpace(mac) ? "MAC 未知" : "MAC " + RuijieRsa.NormalizeMac(mac);
             }
         }
@@ -114,8 +116,8 @@ namespace CampusLink.ViewModels
             get
             {
                 if (!Session.IsOnline) return "未建立会话";
-                if (string.IsNullOrWhiteSpace(Session.UserIndex)) return "在线 · 无本地会话（可能 MAC 无感）";
-                var index = Session.UserIndex;
+                if (!Session.Verified) return "网络已通（MAC 免认证，未校验账号）";
+                var index = Session.UserIndex ?? "";
                 if (index.Length > 12) index = index.Substring(0, 12) + "...";
                 return "userIndex " + index + "  ·  保活 " + Session.KeepaliveInterval + "s";
             }
@@ -150,7 +152,9 @@ namespace CampusLink.ViewModels
 
         public void RebuildClient()
         {
-            Client = new PortalClient(Profile.PortalHost, _log, Profile.SourceIp);
+            _adapter = NetworkAdapterService.Find(Profile.NicId);
+            var sourceIp = _adapter == null ? null : _adapter.Ipv4;
+            Client = new PortalClient(Profile.PortalHost, _log, sourceIp);
         }
 
         /// <summary>尝试登录；silent=true 时（自动重连）不弹验证码窗口。</summary>
@@ -175,10 +179,12 @@ namespace CampusLink.ViewModels
 
                 if (probe.Online)
                 {
+                    // 关键：这里只是"网络通"，并没有验证账号密码，不能当成登录成功
                     Session.State = LinkState.Online;
-                    Session.QueryString = "";
-                    Session.LastMessage = probe.Detail;
-                    Session.LastLoginTime = DateTime.Now;
+                    Session.Verified = false;
+                    Session.UserIndex = "";
+                    Session.LastLoginTime = null;
+                    Session.LastMessage = "当前网络已在线（AC 返回成功页）。这通常是 MAC 免认证，本次没有校验账号密码。";
                     Refresh();
                     RaiseStateChanged();
                     return true;
@@ -187,6 +193,7 @@ namespace CampusLink.ViewModels
                 Session.QueryString = probe.QueryString;
                 if (!string.IsNullOrWhiteSpace(probe.Mac)) Session.DetectedMac = probe.Mac;
                 Session.State = LinkState.LoggingIn;
+                Session.Verified = false;
                 Session.LastMessage = "正在读取登录页配置…";
                 Refresh();
 
@@ -194,7 +201,7 @@ namespace CampusLink.ViewModels
 
                 var login = await Client.LoginAsync(
                     Profile, probe.QueryString, page, "", settings.PasswordEncryptMode, settings.RsaSeparator,
-                    Session.DetectedMac, Tag).ConfigureAwait(true);
+                    MacForAuth, Tag).ConfigureAwait(true);
 
                 if (!login.Success && login.CaptchaRequired && !silent)
                 {
@@ -207,21 +214,22 @@ namespace CampusLink.ViewModels
 
                     login = await Client.LoginAsync(
                         Profile, probe.QueryString, page, code, settings.PasswordEncryptMode, settings.RsaSeparator,
-                        Session.DetectedMac, Tag).ConfigureAwait(true);
+                        MacForAuth, Tag).ConfigureAwait(true);
                 }
 
                 if (login.Success)
                 {
                     Session.State = LinkState.Online;
+                    Session.Verified = true;
                     Session.UserIndex = login.UserIndex;
                     Session.KeepaliveInterval = login.KeepaliveInterval;
                     Session.LastLoginTime = DateTime.Now;
-                    Session.LastMessage = "登录成功";
+                    Session.LastMessage = "登录成功（账号密码已通过门户校验）";
                     _log.Info("[" + Tag + "] 登录成功", Tag);
                     Refresh();
                     RaiseStateChanged();
 
-                    if (Profile.AutoRegisterMac && !string.IsNullOrWhiteSpace(Session.DetectedMac))
+                    if (Profile.AutoRegisterMac && !string.IsNullOrWhiteSpace(MacForAuth))
                     {
                         await TryRegisterMacAsync(silent: true).ConfigureAwait(true);
                     }
@@ -242,6 +250,15 @@ namespace CampusLink.ViewModels
             {
                 _busy.Release();
                 Refresh();
+            }
+        }
+
+        public string MacForAuth
+        {
+            get
+            {
+                if (_adapter != null && !string.IsNullOrWhiteSpace(_adapter.Mac)) return _adapter.Mac;
+                return Session.DetectedMac;
             }
         }
 
@@ -270,9 +287,9 @@ namespace CampusLink.ViewModels
             if (!await _busy.WaitAsync(0).ConfigureAwait(true)) return;
             try
             {
-                if (string.IsNullOrWhiteSpace(Session.UserIndex))
+                if (!Session.Verified || string.IsNullOrWhiteSpace(Session.UserIndex))
                 {
-                    Session.LastMessage = "没有可下线的会话";
+                    Session.LastMessage = "当前没有本地登录会话。若是 MAC 免认证在线，需要「强制下线全部」才能踢掉。";
                     Refresh();
                     return;
                 }
@@ -281,6 +298,7 @@ namespace CampusLink.ViewModels
                 if (result.Success)
                 {
                     Session.State = LinkState.Offline;
+                    Session.Verified = false;
                     Session.UserIndex = "";
                     Session.LastMessage = "已下线";
                     _log.Info("[" + Tag + "] 已下线", Tag);
@@ -318,11 +336,14 @@ namespace CampusLink.ViewModels
                 else if (probe.Online)
                 {
                     Session.State = LinkState.Online;
+                    Session.Verified = false;
+                    Session.UserIndex = "";
                     Session.LastMessage = probe.Detail;
                 }
                 else
                 {
                     Session.State = LinkState.NeedAuth;
+                    Session.Verified = false;
                     Session.QueryString = probe.QueryString;
                     Session.DetectedMac = probe.Mac;
                     Session.LastMessage = probe.Detail;
@@ -351,17 +372,22 @@ namespace CampusLink.ViewModels
 
         private async Task<bool> TryRegisterMacAsync(bool silent)
         {
-            if (string.IsNullOrWhiteSpace(Session.UserIndex))
+            if (!Session.Verified || string.IsNullOrWhiteSpace(Session.UserIndex))
             {
-                if (!silent) Session.LastMessage = "需要先登录才能注册 MAC 无感";
+                if (!silent)
+                {
+                    Session.LastMessage = Session.IsOnline && !Session.Verified
+                        ? "当前是 MAC 免认证在线，没有登录会话，无法注册无感（需要先在门户完成一次账号登录）。"
+                        : "需要先登录成功才能注册 MAC 无感。";
+                }
                 Refresh();
                 return false;
             }
 
-            var mac = !string.IsNullOrWhiteSpace(Profile.Mac) ? Profile.Mac : Session.DetectedMac;
+            var mac = MacForAuth;
             if (string.IsNullOrWhiteSpace(mac))
             {
-                if (!silent) Session.LastMessage = "没有拿到 MAC，无法注册（可手动填写 MAC）";
+                if (!silent) Session.LastMessage = "没有拿到 MAC，无法注册（请在账号里选择网卡）";
                 Refresh();
                 return false;
             }
@@ -386,10 +412,10 @@ namespace CampusLink.ViewModels
             if (!await _busy.WaitAsync(0).ConfigureAwait(true)) return;
             try
             {
-                var mac = !string.IsNullOrWhiteSpace(Profile.Mac) ? Profile.Mac : Session.DetectedMac;
+                var mac = MacForAuth;
                 if (string.IsNullOrWhiteSpace(mac))
                 {
-                    Session.LastMessage = "没有 MAC 可解绑（可在账号里手动填写）";
+                    Session.LastMessage = "没有 MAC 可解绑（请在账号里选择网卡）";
                     Refresh();
                     return;
                 }
@@ -414,7 +440,7 @@ namespace CampusLink.ViewModels
             {
                 if (string.IsNullOrWhiteSpace(Session.UserIndex))
                 {
-                    Session.LastMessage = "没有在线会话";
+                    Session.LastMessage = "没有在线会话（MAC 免认证在线时查不到 userIndex）。";
                     Refresh();
                     return;
                 }
@@ -454,6 +480,7 @@ namespace CampusLink.ViewModels
         public void MarkOffline(string reason)
         {
             Session.State = LinkState.Offline;
+            Session.Verified = false;
             Session.UserIndex = "";
             Session.LastMessage = reason;
             Refresh();
@@ -475,6 +502,7 @@ namespace CampusLink.ViewModels
                 OnPropertyChanged(nameof(IsOnline));
                 OnPropertyChanged(nameof(IsBusy));
                 OnPropertyChanged(nameof(AutoFlags));
+                OnPropertyChanged(nameof(Adapter));
             });
         }
 
@@ -488,26 +516,6 @@ namespace CampusLink.ViewModels
         private void RaiseStateChanged()
         {
             StateChanged?.Invoke(this, EventArgs.Empty);
-        }
-
-        private static string FindLocalMac()
-        {
-            try
-            {
-                foreach (var nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
-                {
-                    if (nic.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Loopback) continue;
-                    if (nic.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) continue;
-                    var address = nic.GetPhysicalAddress();
-                    if (address == null) continue;
-                    var text = address.ToString();
-                    if (text.Length >= 12) return text;
-                }
-            }
-            catch
-            {
-            }
-            return "";
         }
 
         private void OnCommandError(Exception ex)

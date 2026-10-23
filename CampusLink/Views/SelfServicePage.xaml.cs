@@ -1,6 +1,4 @@
-using System.Windows;
 using System.Windows.Controls;
-using CampusLink.ViewModels;
 
 namespace CampusLink.Views
 {
@@ -9,12 +7,6 @@ namespace CampusLink.Views
         public SelfServicePage()
         {
             InitializeComponent();
-        }
-
-        private void SelfServicePasswordBox_OnPasswordChanged(object sender, RoutedEventArgs e)
-        {
-            var viewModel = DataContext as SelfServiceViewModel;
-            if (viewModel != null) viewModel.Password = SelfServicePasswordBox.Password;
         }
     }
 }

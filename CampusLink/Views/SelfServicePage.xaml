@@ -4,33 +4,37 @@
              xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
              FontFamily="{StaticResource AppFont}">
     <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel MaxWidth="760" HorizontalAlignment="Left">
+        <StackPanel MaxWidth="780" HorizontalAlignment="Left">
             <Border Style="{StaticResource CardStyle}">
                 <StackPanel>
-                    <TextBlock Text="SAM+ 自助服务（改密 / 查余额 / 默认密码检测）" Style="{StaticResource SectionTitleStyle}" />
+                    <TextBlock Text="SAM+ 自助服务（登录校验 / 默认密码检测）" Style="{StaticResource SectionTitleStyle}" />
                     <TextBlock Style="{StaticResource MutedTextStyle}"
-                               Text="自助服务强制 RSA 加密并且每次登录都要验证码，所以这里把验证码图片直接显示出来，人工输入即可。默认密码检测原理：用「学号@Gzhu」尝试真实登录一次，能登进去说明默认密码没改。" />
+                               Text="只能使用「账号」页里已保存的账号。自助服务强制 RSA 加密并需要验证码，所以这里把验证码图片直接显示出来，人工输入即可。" />
 
-                    <Grid Margin="0,12,0,0">
+                    <TextBlock Text="选择账号" Style="{StaticResource FieldLabelStyle}" />
+                    <ComboBox ItemsSource="{Binding Accounts}"
+                              SelectedItem="{Binding SelectedAccount}"
+                              DisplayMemberPath="Title"
+                              Height="34" />
+                    <TextBlock Style="{StaticResource MutedTextStyle}" Margin="0,4,0,0"
+                               Text="{Binding PasswordHint}" />
+
+                    <Grid Margin="0,6,0,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Margin="0,0,10,0">
-                            <TextBlock Text="学号" Style="{StaticResource FieldLabelStyle}" />
-                            <ui:TextBox Text="{Binding UserId, UpdateSourceTrigger=PropertyChanged}" />
-                            <TextBlock Text="密码" Style="{StaticResource FieldLabelStyle}" />
-                            <PasswordBox x:Name="SelfServicePasswordBox" Style="{StaticResource AppPasswordBoxStyle}"
-                                         PasswordChanged="SelfServicePasswordBox_OnPasswordChanged" />
+                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                            <TextBlock Text="学号（来自账号配置）" Style="{StaticResource FieldLabelStyle}" />
+                            <TextBlock Text="{Binding AccountUserId}" FontSize="13"
+                                       Foreground="{StaticResource StrongTextBrush}" />
                         </StackPanel>
                         <StackPanel Grid.Column="1">
                             <TextBlock Text="候选默认密码（留空则用设置里的模板）" Style="{StaticResource FieldLabelStyle}" />
                             <ui:TextBox Text="{Binding CandidatePassword, UpdateSourceTrigger=PropertyChanged}" />
-                            <TextBlock Text="自动生成的候选密码" Style="{StaticResource FieldLabelStyle}" />
-                            <TextBlock Text="{Binding CandidatePreview}" Style="{StaticResource MutedTextStyle}"
-                                       VerticalAlignment="Center" Margin="0,6,0,0" />
                         </StackPanel>
                     </Grid>
+                    <TextBlock Text="{Binding CandidatePreview}" Style="{StaticResource MutedTextStyle}" Margin="0,4,0,0" />
 
                     <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
                         <ui:Button Content="获取验证码" Appearance="Primary" Command="{Binding FetchCaptchaCommand}" Margin="0,0,8,0" />
@@ -50,7 +54,7 @@
                                    VerticalAlignment="Center" />
                         </Border>
                         <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
-                            <TextBlock Text="验证码（4 位，照图输入）" Style="{StaticResource FieldLabelStyle}" Margin="0,0,0,4" />
+                            <TextBlock Text="验证码（照图输入）" Style="{StaticResource FieldLabelStyle}" Margin="0,0,0,4" />
                             <StackPanel Orientation="Horizontal">
                                 <ui:TextBox Width="160" MaxLength="8" Text="{Binding Captcha, UpdateSourceTrigger=PropertyChanged}" />
                                 <ui:Button Content="清空" Appearance="Transparent" Margin="8,0,0,0"
@@ -76,11 +80,11 @@
                 <StackPanel>
                     <TextBlock Text="说明与边界" Style="{StaticResource SectionTitleStyle}" />
                     <TextBlock Style="{StaticResource MutedTextStyle}"
-                               Text="· 资料里只逆向到自助服务的登录接口，改密 / 余额等业务页面是登录后的 JSF 动态页，未做接口化，点击「打开自助服务」在浏览器里操作最稳。" />
+                               Text="· 资料里只逆向到自助服务的登录接口，改密 / 余额等业务页面是登录后的 JSF 动态页，未做接口化，点「打开自助服务」在浏览器里操作最稳。" />
                     <TextBlock Style="{StaticResource MutedTextStyle}" Margin="0,4,0,0"
                                Text="· 验证码是图片，离线没有可靠的 C# OCR 方案（资料里的 ddddocr 是 Python 库），所以这里保留人工识别。" />
                     <TextBlock Style="{StaticResource MutedTextStyle}" Margin="0,4,0,0"
-                               Text="· 默认密码检测只检测你自己的账号：登录成功即说明密码仍是默认值，请尽快修改。" />
+                               Text="· 默认密码检测只检测你自己的账号：用候选密码登录成功即说明密码仍是默认值，请尽快修改。" />
                 </StackPanel>
             </Border>
         </StackPanel>

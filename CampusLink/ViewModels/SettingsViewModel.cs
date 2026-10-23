@@ -31,6 +31,20 @@ namespace CampusLink.ViewModels
             _onSaved = onSaved;
             _startWithWindows = StartupService.IsEnabled();
             SaveCommand = new RelayCommand(Save);
+            OpenTaskbarSettingsCommand = new RelayCommand(() =>
+            {
+                try
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ms-settings:taskbar")
+                    {
+                        UseShellExecute = true
+                    });
+                }
+                catch (Exception ex)
+                {
+                    _log.Warn("打开任务栏设置失败：" + ex.Message);
+                }
+            });
             PasswordEncryptModes = new List<OptionItem>
             {
                 new OptionItem { Key = "auto", Label = "自动（按登录页隐藏字段判断）" },
@@ -40,6 +54,8 @@ namespace CampusLink.ViewModels
         }
 
         public ICommand SaveCommand { get; }
+
+        public ICommand OpenTaskbarSettingsCommand { get; }
 
         public List<OptionItem> PasswordEncryptModes { get; }
 

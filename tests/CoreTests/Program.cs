@@ -1,0 +1,527 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Numerics;
+using System.Text;
+using CampusLink.Infrastructure;
+using CampusLink.Models;
+using CampusLink.Services;
+using Newtonsoft.Json;
+
+namespace CoreTests
+{
+    internal static class Program
+    {
+        private static int _passed;
+        private static int _failed;
+
+        private static void Check(string name, Action action)
+        {
+            try
+            {
+                action();
+                _passed++;
+                Console.WriteLine("[PASS] " + name);
+            }
+            catch (Exception ex)
+            {
+                _failed++;
+                Console.WriteLine("[FAIL] " + name + " -> " + ex.Message);
+            }
+        }
+
+        private static void Assert(bool condition, string message)
+        {
+            if (!condition) throw new Exception(message);
+        }
+
+        private static void Equal(string expected, string actual, string what)
+        {
+            if (!string.Equals(expected, actual, StringComparison.Ordinal))
+            {
+                throw new Exception(what + " 期望 [" + expected + "] 实际 [" + actual + "]");
+            }
+        }
+
+        private static int Main()
+        {
+            var log = new LogService();
+
+            Console.WriteLine("== 基础工具 ==");
+            Check("EncodeUriComponent 普通字符", () =>
+                Equal("abc123-_.!~*'()", PortalClient.EncodeUriComponent("abc123-_.!~*'()"), "普通字符"));
+            Check("EncodeUriComponent 空格/斜杠", () =>
+                Equal("a%20b%2Fc%3F", PortalClient.EncodeUriComponent("a b/c?"), "特殊字符"));
+            Check("EncodeUriComponent 中文 UTF-8", () =>
+                Equal("%E4%B8%AD%E6%96%87", PortalClient.EncodeUriComponent("中文"), "中文编码"));
+            Check("EncodeUriComponent 百分号", () =>
+                Equal("100%25", PortalClient.EncodeUriComponent("100%"), "百分号"));
+            Check("DoubleEncode 二次编码", () =>
+                Equal("a%2520b", PortalClient.DoubleEncode("a b"), "双重编码"));
+            Check("DoubleEncode 空串", () =>
+                Equal("", PortalClient.DoubleEncode(null), "空串"));
+            Check("NormalizeMac 去掉分隔符并大写", () =>
+                Equal("AABBCCDDEEFF", RuijieRsa.NormalizeMac("aa-bb-cc-dd-ee-ff"), "MAC 归一化"));
+            Check("NormalizeMac 处理空值", () =>
+                Equal("", RuijieRsa.NormalizeMac(null), "空 MAC"));
+
+            Console.WriteLine("== DPAPI / 持久化 ==");
+            Check("DPAPI 加密后可解密", () =>
+            {
+                const string plain = "P@ssw0rd-中文-!@#";
+                var cipher = AccountStore.Protect(plain);
+                Assert(cipher.Length > 0, "密文为空");
+                Equal(plain, AccountStore.Unprotect(cipher), "解密结果");
+            });
+            Check("AccountProfile 序列化不含明文密码", () =>
+            {
+                var profile = new AccountProfile { UserId = "20231234", Password = "secret", PasswordCipher = "cipher" };
+                var json = JsonConvert.SerializeObject(profile);
+                Assert(json.IndexOf("secret", StringComparison.Ordinal) < 0, "明文密码被序列化");
+                Assert(json.IndexOf("cipher", StringComparison.Ordinal) >= 0, "密文未序列化");
+            });
+            Check("AccountProfile 反序列化保留字段", () =>
+            {
+                var json = JsonConvert.SerializeObject(new AccountProfile
+                {
+                    UserId = "20231234",
+                    DisplayName = "宿舍主号",
+                    PortalHost = "222.201.54.55",
+                    AutoReconnect = true
+                });
+                var restored = JsonConvert.DeserializeObject<AccountProfile>(json);
+                Equal("20231234", restored.UserId, "UserId");
+                Equal("宿舍主号", restored.DisplayName, "DisplayName");
+            });
+
+            Console.WriteLine("== JSON 容错 ==");
+            Check("标准 JSON 解析", () =>
+                Equal("success", JsonHelper.GetString(JsonHelper.ParseObject("{\"result\":\"success\"}"), "result"), "result"));
+            Check("带前后垃圾字符的 JSON", () =>
+                Equal("success", JsonHelper.GetString(JsonHelper.ParseObject("var x= {\"result\":\"success\"};"), "result"), "result"));
+            Check("字符串数字转 int", () =>
+                Assert(JsonHelper.GetInt(JsonHelper.ParseObject("{\"keepaliveInterval\":\"120\"}"), "keepaliveInterval") == 120, "int 解析"));
+            Check("布尔字符串转 bool", () =>
+                Assert(JsonHelper.GetBool(JsonHelper.ParseObject("{\"isAutoLogin\":\"true\"}"), "isAutoLogin"), "bool 解析"));
+
+            Console.WriteLine("== RSA ==");
+            Check("RSA 无填充加密可被私钥还原", () =>
+            {
+                var p = BigInteger.Parse("32416190071");
+                var q = BigInteger.Parse("32416187567");
+                var n = p * q;
+                var e = new BigInteger(65537);
+                var phi = (p - 1) * (q - 1);
+                var d = ModInverse(e, phi);
+
+                const string password = "Ab3!";
+                var cipherHex = RuijieRsa.EncryptPassword("10001", n.ToString("x"), password);
+
+                var digitCount = (BitLength(n) + 15) / 16;
+                Assert(cipherHex.Length == digitCount * 4, "密文长度应为 " + digitCount * 4 + "，实际 " + cipherHex.Length);
+
+                var encrypted = BigInteger.Parse("0" + cipherHex, NumberStyles.HexNumber);
+                var decrypted = BigInteger.ModPow(encrypted, d, n);
+
+                var reversed = Reverse(password);
+                var chunkSize = 2 * digitCount;
+                var digits = new List<int>();
+                for (var i = 0; i < chunkSize; i += 2)
+                {
+                    var low = i < reversed.Length ? reversed[i] : '\0';
+                    var high = i + 1 < reversed.Length ? reversed[i + 1] : '\0';
+                    digits.Add((int)low + ((int)high << 8));
+                }
+
+                var expectedValue = BigInteger.Zero;
+                for (var i = digits.Count - 1; i >= 0; i--)
+                {
+                    expectedValue = expectedValue * 65536 + digits[i];
+                }
+
+                Assert(decrypted == expectedValue, "解密结果与期望明文不一致");
+            });
+            Check("RSA 拼接 MAC 后与直接加密等价", () =>
+            {
+                var p = BigInteger.Parse("32416190071");
+                var q = BigInteger.Parse("32416187567");
+                var n = p * q;
+                var modulusHex = n.ToString("x");
+                var withMac = RuijieRsa.EncryptPasswordWithMac("10001", modulusHex, "pwd", "aabbccddeeff", ">");
+                var direct = RuijieRsa.EncryptReversed("10001", modulusHex, "pwd>AABBCCDDEEFF");
+                Equal(direct, withMac, "EncryptPasswordWithMac");
+            });
+
+            Console.WriteLine("== 门户协议（mock） ==");
+            TestProbeAndLogin(log);
+            TestAlreadyOnline(log);
+            TestLoginFailureMessage(log);
+            TestPasswordEncryptMode(log);
+            TestOtherEndpoints(log);
+            TestProbeFailure(log);
+
+            Console.WriteLine("== 自助服务（mock） ==");
+            TestSelfService(log);
+
+            Console.WriteLine();
+            Console.WriteLine("通过 " + _passed + " 项，失败 " + _failed + " 项");
+            return _failed == 0 ? 0 : 1;
+        }
+
+        private static string Absolute(MockRequest request, string path)
+        {
+            var host = request.Headers.TryGetValue("Host", out var value) ? value : "127.0.0.1";
+            return "http://" + host + path;
+        }
+
+        private static void TestProbeAndLogin(LogService log)
+        {
+            using (var portal = new MockPortal(req =>
+            {
+                if (req.Path == "/")
+                {
+                    return MockResponse.Redirect(Absolute(req, "/eportal/index.jsp?c=ACSW&v=1&mac=aa-bb-cc-dd-ee-ff&ip=10.1.2.3&ssid=Test"));
+                }
+                if (req.Path.StartsWith("/eportal/index.jsp", StringComparison.Ordinal))
+                {
+                    return MockResponse.Text(
+                        "<html><body><form>"
+                        + "<input type=\"hidden\" id=\"passwordEncrypt\" name=\"passwordEncrypt\" value=\"false\" />"
+                        + "<input type=\"hidden\" id=\"publicKeyExponent\" name=\"publicKeyExponent\" value=\"\" />"
+                        + "</form></body></html>");
+                }
+                if (req.Path == "/eportal/InterFace.do")
+                {
+                    if (req.Query.Contains("method=login"))
+                    {
+                        return MockResponse.Json("{\"userIndex\":\"UI-123\",\"result\":\"success\",\"message\":\"\",\"keepaliveInterval\":60,\"validCodeUrl\":\"\"}");
+                    }
+                    if (req.Query.Contains("method=keepalive")) return MockResponse.Json("{\"result\":\"success\"}");
+                    if (req.Query.Contains("method=registerMac")) return MockResponse.Json("{\"result\":\"success\",\"message\":\"\"}");
+                }
+                return new MockResponse { Status = 404, Reason = "Not Found" };
+            }))
+            {
+                var client = new PortalClient("127.0.0.1:" + portal.Port, log, null);
+                var profile = new AccountProfile
+                {
+                    UserId = "a b",
+                    Password = "p&w",
+                    PortalHost = "127.0.0.1:" + portal.Port
+                };
+
+                var probe = client.ProbeAsync(new[] { "http://127.0.0.1:" + portal.Port + "/" }, "test").GetAwaiter().GetResult();
+                Check("探测拿到 queryString", () =>
+                {
+                    Assert(probe.Ok, "探测失败：" + probe.Detail);
+                    Assert(probe.NeedsAuth, "应标记需要认证");
+                    Equal("c=ACSW&v=1&mac=aa-bb-cc-dd-ee-ff&ip=10.1.2.3&ssid=Test", probe.QueryString, "queryString");
+                    Equal("aa-bb-cc-dd-ee-ff", probe.Mac, "MAC");
+                });
+
+                var page = client.GetLoginPageAsync(probe.QueryString, "test").GetAwaiter().GetResult();
+                Check("登录页解析 passwordEncrypt", () =>
+                {
+                    Equal("false", page.PasswordEncrypt, "passwordEncrypt");
+                    Assert(!page.HasRsaKey, "不应有 RSA 公钥");
+                });
+
+                var login = client.LoginAsync(profile, probe.QueryString, page, "", "auto", ">", probe.Mac, "test")
+                    .GetAwaiter().GetResult();
+                Check("登录成功并返回 userIndex", () =>
+                {
+                    Assert(login.Success, "登录失败：" + login.Message);
+                    Equal("UI-123", login.UserIndex, "userIndex");
+                    Assert(login.KeepaliveInterval == 60, "keepaliveInterval 应为 60");
+                });
+
+                Check("登录请求体是双重 URL 编码", () =>
+                {
+                    var request = portal.Requests.Find(r => r.Query.Contains("method=login"));
+                    Assert(request != null, "没有收到 login 请求");
+                    Assert(request.Headers.TryGetValue("Content-Type", out var contentType)
+                           && contentType.Contains("application/x-www-form-urlencoded"), "Content-Type 不对：" + contentType);
+                    Assert(request.Body.Contains("userId=a%2520b"), "userId 未双重编码：" + request.Body);
+                    Assert(request.Body.Contains("password=p%2526w"), "password 未双重编码：" + request.Body);
+                    Assert(request.Body.Contains("queryString=c%253DACSW%2526v%253D1"), "queryString 未双重编码：" + request.Body);
+                    Assert(request.Body.Contains("passwordEncrypt=false"), "passwordEncrypt 字段缺失");
+                });
+
+                var keepalive = client.KeepaliveAsync("UI-123", "test").GetAwaiter().GetResult();
+                Check("保活成功", () => Assert(keepalive.Success, "保活失败：" + keepalive.Message));
+
+                var register = client.RegisterMacAsync("aa-bb-cc-dd-ee-ff", "UI-123", "test").GetAwaiter().GetResult();
+                Check("无感注册成功且 MAC 已归一化", () =>
+                {
+                    Assert(register.Success, "注册失败：" + register.Message);
+                    var request = portal.Requests.Find(r => r.Query.Contains("method=registerMac"));
+                    Assert(request != null, "没有收到 registerMac");
+                    Assert(request.Body.Contains("mac=AABBCCDDEEFF"), "MAC 未归一化：" + request.Body);
+                    Assert(request.Body.Contains("userIndex=UI-123"), "userIndex 缺失：" + request.Body);
+                });
+            }
+        }
+
+        private static void TestAlreadyOnline(LogService log)
+        {
+            using (var portal = new MockPortal(req => MockResponse.Redirect(Absolute(req, "/eportal/redirectortosuccess.jsp"))))
+            {
+                var client = new PortalClient("127.0.0.1:" + portal.Port, log, null);
+                var probe = client.ProbeAsync(new[] { "http://127.0.0.1:" + portal.Port + "/" }, "test").GetAwaiter().GetResult();
+                Check("已在线时探测标记 Online", () =>
+                {
+                    Assert(probe.Ok, "探测失败");
+                    Assert(probe.Online, "应标记在线");
+                    Assert(!probe.NeedsAuth, "不应要求认证");
+                });
+            }
+        }
+
+        private static void TestLoginFailureMessage(LogService log)
+        {
+            using (var portal = new MockPortal(req =>
+            {
+                if (req.Path == "/") return MockResponse.Redirect(Absolute(req, "/eportal/index.jsp?c=ACSW&mac=AABBCCDDEEFF"));
+                if (req.Path.StartsWith("/eportal/index.jsp", StringComparison.Ordinal))
+                    return MockResponse.Text("<input name=\"passwordEncrypt\" value=\"false\" />");
+                if (req.Path == "/eportal/InterFace.do")
+                    return MockResponse.Json("{\"result\":\"fail\",\"message\":\"WEB认证设备未注册，请确认SAM+/portal/设备上的参数配置是否一致\"}");
+                return new MockResponse { Status = 404 };
+            }))
+            {
+                var client = new PortalClient("127.0.0.1:" + portal.Port, log, null);
+                var profile = new AccountProfile { UserId = "20231234", Password = "x", PortalHost = "127.0.0.1:" + portal.Port };
+                var probe = client.ProbeAsync(new[] { "http://127.0.0.1:" + portal.Port + "/" }, "test").GetAwaiter().GetResult();
+                var page = client.GetLoginPageAsync(probe.QueryString, "test").GetAwaiter().GetResult();
+                var login = client.LoginAsync(profile, probe.QueryString, page, "", "auto", ">", probe.Mac, "test")
+                    .GetAwaiter().GetResult();
+                Check("设备未注册时给出排错提示", () =>
+                {
+                    Assert(!login.Success, "应登录失败");
+                    Assert(login.Message.Contains("queryString"), "错误提示应包含 queryString 排查建议：" + login.Message);
+                });
+            }
+        }
+
+        private static void TestPasswordEncryptMode(LogService log)
+        {
+            const string modulus =
+                "94dd2a8675fb779e6b9f7103698634cd400f27a154afa67af6166a43fc26417c1d6c48e0e21e8b4b0c6a6b3a3d0a3f52a3f4e4f4b3a4d5c6b7a8f9e0d1c2b3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9";
+
+            using (var portal = new MockPortal(req =>
+            {
+                if (req.Path == "/") return MockResponse.Redirect(Absolute(req, "/eportal/index.jsp?c=ACSW&mac=AABBCCDDEEFF"));
+                if (req.Path.StartsWith("/eportal/index.jsp", StringComparison.Ordinal))
+                {
+                    return MockResponse.Text(
+                        "<input type=\"hidden\" name=\"passwordEncrypt\" value=\"true\" />"
+                        + "<input type=\"hidden\" name=\"publicKeyExponent\" value=\"10001\" />"
+                        + "<input type=\"hidden\" name=\"publicKeyModulus\" value=\"" + modulus + "\" />");
+                }
+                if (req.Path == "/eportal/InterFace.do")
+                    return MockResponse.Json("{\"userIndex\":\"UI-9\",\"result\":\"success\",\"keepaliveInterval\":120}");
+                return new MockResponse { Status = 404 };
+            }))
+            {
+                var client = new PortalClient("127.0.0.1:" + portal.Port, log, null);
+                var profile = new AccountProfile { UserId = "20231234", Password = "plainpwd", PortalHost = "127.0.0.1:" + portal.Port };
+                var probe = client.ProbeAsync(new[] { "http://127.0.0.1:" + portal.Port + "/" }, "test").GetAwaiter().GetResult();
+                var page = client.GetLoginPageAsync(probe.QueryString, "test").GetAwaiter().GetResult();
+                Check("登录页识别 RSA 公钥", () => Assert(page.HasRsaKey, "未识别到 RSA 公钥"));
+
+                var login = client.LoginAsync(profile, probe.QueryString, page, "", "auto", ">", probe.Mac, "test")
+                    .GetAwaiter().GetResult();
+                Check("passwordEncrypt=true 时提交密文", () =>
+                {
+                    Assert(login.Success, "登录失败：" + login.Message);
+                    var request = portal.Requests.Find(r => r.Query.Contains("method=login"));
+                    Assert(request != null, "没有收到 login 请求");
+                    Assert(request.Body.Contains("passwordEncrypt=true"), "应声明 passwordEncrypt=true");
+                    Assert(!request.Body.Contains("password=plainpwd"), "不应提交明文密码");
+                    var expected = PortalClient.DoubleEncode(
+                        RuijieRsa.EncryptPasswordWithMac("10001", modulus, "plainpwd", probe.Mac, ">"));
+                    Assert(request.Body.Contains("password=" + expected), "RSA 密文与预期不一致");
+                });
+            }
+        }
+
+        private static void TestOtherEndpoints(LogService log)
+        {
+            using (var portal = new MockPortal(req =>
+            {
+                if (req.Path == "/eportal/InterFace.do")
+                {
+                    if (req.Query.Contains("method=getOnlineUserInfo"))
+                        return MockResponse.Json("{\"result\":\"success\",\"userId\":\"20231234\",\"userIp\":\"10.1.2.3\",\"userMac\":\"aabbccddeeff\",\"userUrl\":\"http://x\"}");
+                    if (req.Query.Contains("method=getServices"))
+                        return MockResponse.Json("{\"result\":\"success\",\"defaultService\":\"internet\",\"services\":\"[{\\\"serviceName\\\":\\\"s1\\\",\\\"serviceShowName\\\":\\\"服务一\\\"}]\",\"isService\":\"true\"}");
+                    if (req.Query.Contains("method=pageInfo"))
+                        return MockResponse.Json("{\"result\":\"success\",\"isAutoLogin\":\"true\",\"announcement\":\"公告\",\"validCodeUrl\":\"/eportal/validcode\"}");
+                    if (req.Query.Contains("method=logoutByUserIdAndPass")) return MockResponse.Json("{\"result\":\"success\"}");
+                    if (req.Query.Contains("method=logout")) return MockResponse.Json("{\"result\":\"success\"}");
+                    if (req.Query.Contains("method=cancelMacWithUserNameAndMac")) return MockResponse.Json("{\"result\":\"success\"}");
+                }
+                return new MockResponse { Status = 404 };
+            }))
+            {
+                var client = new PortalClient("127.0.0.1:" + portal.Port, log, null);
+
+                var info = client.GetOnlineUserInfoAsync("UI-1", "test").GetAwaiter().GetResult();
+                Check("getOnlineUserInfo 解析字段", () =>
+                {
+                    Assert(info.Success, "查询失败：" + info.Message);
+                    Equal("10.1.2.3", info.UserIp, "userIp");
+                    Equal("aabbccddeeff", info.UserMac, "userMac");
+                });
+
+                var services = client.GetServicesAsync("c=ACSW&mac=AABBCCDDEEFF", "test").GetAwaiter().GetResult();
+                Check("getServices 解析服务数组", () =>
+                {
+                    Assert(services.Success, "查询失败：" + services.Message);
+                    Equal("internet", services.DefaultService, "defaultService");
+                    Assert(services.Services.Count == 1, "服务数量应为 1，实际 " + services.Services.Count);
+                    Equal("s1", services.Services[0].ServiceName, "serviceName");
+                    Equal("服务一", services.Services[0].ShowName, "serviceShowName");
+                });
+
+                var pageInfo = client.GetPageInfoAsync("c=ACSW", "test").GetAwaiter().GetResult();
+                Check("pageInfo 解析 isAutoLogin/公告", () =>
+                {
+                    Assert(pageInfo.Success, "查询失败：" + pageInfo.Message);
+                    Assert(pageInfo.IsAutoLogin, "isAutoLogin 应为 true");
+                    Equal("公告", pageInfo.Announcement, "announcement");
+                });
+
+                var logoutAll = client.LogoutAllAsync("20231234", "p&ss", "test").GetAwaiter().GetResult();
+                Check("logoutByUserIdAndPass 单次编码", () =>
+                {
+                    Assert(logoutAll.Success, "下线失败：" + logoutAll.Message);
+                    var request = portal.Requests.Find(r => r.Query.Contains("method=logoutByUserIdAndPass"));
+                    Assert(request.Body.Contains("pass=p%26ss"), "pass 应单次编码：" + request.Body);
+                });
+
+                var cancel = client.CancelMacAsync("20231234", "aa:bb:cc:dd:ee:ff", "test").GetAwaiter().GetResult();
+                Check("cancelMac 提交归一化 MAC", () =>
+                {
+                    Assert(cancel.Success, "解绑失败：" + cancel.Message);
+                    var request = portal.Requests.Find(r => r.Query.Contains("method=cancelMacWithUserNameAndMac"));
+                    Assert(request.Body.Contains("usermac=AABBCCDDEEFF"), "MAC 未归一化：" + request.Body);
+                });
+            }
+        }
+
+        private static void TestProbeFailure(LogService log)
+        {
+            int closedPort;
+            var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+            listener.Start();
+            try
+            {
+                closedPort = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+            }
+            finally
+            {
+                listener.Stop();
+            }
+
+            var client = new PortalClient("127.0.0.1:" + closedPort, log, null);
+            var probe = client.ProbeAsync(new[] { "http://127.0.0.1:" + closedPort + "/" }, "test").GetAwaiter().GetResult();
+            Check("连接失败时探测返回错误而不是抛异常", () =>
+            {
+                Assert(!probe.Ok, "应返回失败");
+                Assert(!string.IsNullOrWhiteSpace(probe.Detail), "应带失败说明");
+            });
+        }
+
+        private static void TestSelfService(LogService log)
+        {
+            var captchaPng = new byte[] { 0x89, 0x50, 0x4E, 0x47, 1, 2, 3, 4 };
+            var mode = "success";
+
+            using (var portal = new MockPortal(req =>
+            {
+                if (req.Path.EndsWith("login_self.jsf", StringComparison.Ordinal))
+                {
+                    return MockResponse.Text(
+                        "<html><input type=\"hidden\" id=\"publicKey\" value=\"10001&amp;94dd2a8675fb779e6b9f7103698634cd400f27a154afa67af6166a43fc26417\" /></html>");
+                }
+                if (req.Path.EndsWith("verifycode.jsp", StringComparison.Ordinal))
+                {
+                    return new MockResponse { Body = captchaPng, Headers = { ["Content-Type"] = "image/png" } };
+                }
+                if (req.Path.EndsWith("login_judge.jsf", StringComparison.Ordinal))
+                {
+                    if (mode == "success") return MockResponse.Text("self.location='module/webcontent/web/index_self.jsf';");
+                    if (mode == "captcha") return MockResponse.Text("self.location='login_self.jsf?verifyError=true&name=x';");
+                    return MockResponse.Text("self.location='login_self.jsf?errorMsg=%D3%C3%BB%A7%B2%BB%B4%E6%D4%DA%BB%F2%C3%DC%C2%EB%B4%ED%CE%F3';");
+                }
+                return new MockResponse { Status = 404 };
+            }))
+            {
+                var client = new SelfServiceClient("http://127.0.0.1:" + portal.Port + "/selfservice", log);
+                var challenge = client.BeginLoginAsync("test").GetAwaiter().GetResult();
+                Check("自助服务取到公钥和验证码", () =>
+                {
+                    Assert(challenge.CaptchaImage != null && challenge.CaptchaImage.Length > 0, "验证码为空：" + challenge.Detail);
+                    Assert(challenge.PublicKey.Contains("10001"), "公钥异常：" + challenge.PublicKey);
+                    Assert(challenge.PublicKey.Contains("&"), "公钥应包含分隔符：" + challenge.PublicKey);
+                });
+
+                var ok = client.LoginAsync("20231234", "pwd", challenge.PublicKey, "AB12", "test").GetAwaiter().GetResult();
+                Check("自助服务登录成功判定", () => Assert(ok.Success, "应判定成功：" + ok.Message));
+
+                mode = "captcha";
+                var captcha = client.LoginAsync("20231234", "pwd", challenge.PublicKey, "AB12", "test").GetAwaiter().GetResult();
+                Check("自助服务验证码错误识别", () =>
+                {
+                    Assert(!captcha.Success, "应判失败");
+                    Assert(captcha.CaptchaWrong, "应识别为验证码错误：" + captcha.Message);
+                });
+
+                mode = "password";
+                var wrong = client.LoginAsync("20231234", "pwd", challenge.PublicKey, "AB12", "test").GetAwaiter().GetResult();
+                Check("自助服务密码错误识别", () =>
+                {
+                    Assert(!wrong.Success, "应判失败");
+                    Assert(wrong.PasswordWrong, "应识别为密码错误：" + wrong.Message);
+                });
+            }
+        }
+
+        private static string Reverse(string text)
+        {
+            var chars = text.ToCharArray();
+            Array.Reverse(chars);
+            return new string(chars);
+        }
+
+        private static int BitLength(BigInteger value)
+        {
+            if (value.IsZero) return 0;
+            var bytes = value.ToByteArray();
+            var length = bytes.Length;
+            while (length > 1 && bytes[length - 1] == 0) length--;
+            var last = bytes[length - 1];
+            var leadingZeros = 0;
+            for (var mask = 0x80; mask > 0; mask >>= 1)
+            {
+                if ((last & mask) != 0) break;
+                leadingZeros++;
+            }
+            return (length - 1) * 8 + (8 - leadingZeros);
+        }
+
+        private static BigInteger ModInverse(BigInteger a, BigInteger m)
+        {
+            BigInteger t = 0, newT = 1, r = m, newR = a;
+            while (newR != 0)
+            {
+                var quotient = r / newR;
+                var tmp = t - quotient * newT; t = newT; newT = tmp;
+                tmp = r - quotient * newR; r = newR; newR = tmp;
+            }
+            if (t < 0) t += m;
+            return t;
+        }
+    }
+}

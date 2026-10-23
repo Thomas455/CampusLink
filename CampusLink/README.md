@@ -33,6 +33,24 @@ msbuild CampusLink.csproj -t:Restore,Build -p:Configuration=Release
 
 > 直接双击 `CampusLink.slnx` 用 VS 打开也可以，首次构建会自动还原 NuGet 包。
 
+## 分发方式（安装程序 + 更新包）
+
+一条命令生成两种产物：
+
+```powershell
+# 在仓库根目录
+powershell -ExecutionPolicy Bypass -File tools\package.ps1
+```
+
+| 产物 | 用途 |
+| --- | --- |
+| `dist\CampusLink-Setup-<版本>.exe` | **首次安装**：Inno Setup 安装程序，安装到 `Program Files\CampusLink`，创建开始菜单/可选桌面快捷方式，带卸载器 |
+| `dist\CampusLink-<版本>-win.zip` | **自动更新**：整个程序目录（exe + 依赖 dll + config），更新器解压后整目录覆盖 |
+
+- 自动更新只认 **zip**；`Setup.exe` 会被忽略（避免把安装器当成主程序覆盖）。
+- 依赖：Windows 10/11 自带 .NET Framework 4.8；编译安装程序需要 Inno Setup 6（`winget install JRSoftware.InnoSetup`），没有时脚本只出 zip。
+- 发布 Release 时把 **Setup.exe 和 zip 一起上传**：新用户装 Setup，老用户自动更新走 zip。
+
 ## 快速上手
 
 1. 电脑连上校园网，**先不要用浏览器登录**。
@@ -113,9 +131,11 @@ msbuild CampusLink.csproj -t:Restore,Build -p:Configuration=Release
 - **代理**：更新请求走**系统代理**（有 Clash 等代理时能访问 GitHub），校园网门户请求仍直连。
 - **发布约定**（两个平台都要照做，否则自动更新拿不到安装包）：
   - tag 用 `vX.Y.Z`，例如 `v1.2.0`
-  - Release 附件上传 `CampusLink.exe`；如果是压缩包则命名为 `CampusLink.zip`（里面放 `CampusLink.exe`）
+  - **更新包**：上传 `CampusLink-<版本>-win.zip`（整个程序目录，由 `tools\package.ps1` 生成）
+  - **安装包**：上传 `CampusLink-Setup-<版本>.exe`（新用户用；更新器会忽略它）
+  - 只上传单文件 `CampusLink.exe` 也可作为兜底（但依赖 DLL 有变化时必须给 zip）
 - **UI**：发现新版本 → 主窗口顶部绿色提示条（可「忽略」）+ 托盘气泡；「关于」页可手动检查、查看发布说明、带进度条下载。
-- **安装**：下载到 `%TEMP%`，写一个带重试的 `.cmd`，等主进程退出后覆盖 exe 并重新启动（账号配置不动）。
+- **安装**：下载 zip 到 `%TEMP%` 并解包，写一个带重试的 `.cmd`，等主进程退出后**整目录覆盖**（robocopy）并重新启动；账号配置不动。
 - **启动检查**：默认开启，且 6 小时内最多检查一次（可在设置里调整间隔/关闭）。
 - **镜像/离线测试**：环境变量 `CAMPUSLINK_GITCODE_API` / `CAMPUSLINK_GITCODE_WEB`（GitCode）、`CAMPUSLINK_UPDATE_API` / `CAMPUSLINK_UPDATE_WEB`（GitHub）可指向镜像或本地 mock。
 

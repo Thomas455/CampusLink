@@ -5,9 +5,10 @@
 ```
 CampusLink/
 ├─ CampusLink/        应用源码（WPF, .NET Framework 4.8）+ 使用文档
-│  └─ README.md       ← 功能、构建、协议说明、常见问题
-├─ tests/CoreTests/   协议层自动化测试（自带 mock 门户，不依赖校园网）
-├─ tools/             开发辅助脚本（SVG → 多尺寸 ICO）
+│  └─ README.md       ← 功能、构建、分发、协议说明、常见问题
+├─ tests/CoreTests/   协议层与更新逻辑自动化测试（自带 mock 服务）
+├─ tools/             开发辅助脚本（图标生成、打包：package.ps1）
+├─ installer/         Inno Setup 安装脚本（CampusLink.iss）
 ├─ docs/              截图与交付说明
 │  ├─ screenshots/    界面截图
 │  └─ 交付说明.md      验证记录、已知限制、后续计划
@@ -20,6 +21,13 @@ CampusLink/
 cd CampusLink
 msbuild CampusLink.csproj -t:Restore,Build -p:Configuration=Release
 # 产物 bin\Release\CampusLink.exe
+```
+
+## 打包（安装程序 + 更新 zip）
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\package.ps1
+# 产物：dist\CampusLink-Setup-<版本>.exe 和 dist\CampusLink-<版本>-win.zip
 ```
 
 ## 运行测试

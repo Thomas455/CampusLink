@@ -102,18 +102,22 @@ msbuild CampusLink.csproj -t:Restore,Build -p:Configuration=Release
 
 ## 自动更新
 
-项目主页：<https://github.com/Thomas455/CampusLink>
+项目主页：<https://github.com/Thomas455/CampusLink>（GitCode 镜像：<https://gitcode.com/Thomas455/CampusLink>）
 
-- **检查**：优先请求 `https://api.github.com/repos/Thomas455/CampusLink/releases/latest`；
-  若 API 被限流（403/429）或不可用，则请求 `https://github.com/Thomas455/CampusLink/releases/latest`，
-  从 302 跳转里解析版本号（不消耗 API 配额）。
-- **发布约定**（发 Release 时请照做，否则自动更新拿不到安装包）：
+- **检查顺序**：先 **GitCode**，再 **GitHub**，两个源各自检查，取版本号最高的那个；同版本时优先 GitCode，并把另一个源的附件作为下载备选。
+- **每个源的检查方式**：
+  - GitCode：`https://api.gitcode.com/api/v5/repos/Thomas455/CampusLink/releases`（列表，匿名可读）
+  - GitHub：`https://api.github.com/repos/Thomas455/CampusLink/releases/latest`
+  - GitHub API 失败时走 `releases/latest` 的 302 跳转兜底
+  - 都拿不到时用 git 的 `info/refs` 读 tag（只提示版本，没有附件）
+- **代理**：更新请求走**系统代理**（有 Clash 等代理时能访问 GitHub），校园网门户请求仍直连。
+- **发布约定**（两个平台都要照做，否则自动更新拿不到安装包）：
   - tag 用 `vX.Y.Z`，例如 `v1.2.0`
   - Release 附件上传 `CampusLink.exe`；如果是压缩包则命名为 `CampusLink.zip`（里面放 `CampusLink.exe`）
 - **UI**：发现新版本 → 主窗口顶部绿色提示条（可「忽略」）+ 托盘气泡；「关于」页可手动检查、查看发布说明、带进度条下载。
 - **安装**：下载到 `%TEMP%`，写一个带重试的 `.cmd`，等主进程退出后覆盖 exe 并重新启动（账号配置不动）。
 - **启动检查**：默认开启，且 6 小时内最多检查一次（可在设置里调整间隔/关闭）。
-- **镜像/离线测试**：设置环境变量 `CAMPUSLINK_UPDATE_API`（API 地址）、`CAMPUSLINK_UPDATE_WEB`（GitHub 网页基地址）可指向镜像或本地 mock。
+- **镜像/离线测试**：环境变量 `CAMPUSLINK_GITCODE_API` / `CAMPUSLINK_GITCODE_WEB`（GitCode）、`CAMPUSLINK_UPDATE_API` / `CAMPUSLINK_UPDATE_WEB`（GitHub）可指向镜像或本地 mock。
 
 ![更新对话框](../docs/screenshots/update-dialog.png)
 
